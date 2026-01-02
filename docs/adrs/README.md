@@ -33,3 +33,5 @@ Use the template in [0000-template.md](0000-template.md).
 ## Index
 
 <!-- Add ADRs below in chronological order -->
+
+- [0001: Use Slack Session Tokens Instead of Bot API](0001-slack-session-tokens.md) - **Accepted** (2026-01-02)
