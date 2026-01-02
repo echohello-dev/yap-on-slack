@@ -21,14 +21,10 @@ from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
+from rich.progress import (BarColumn, Progress, SpinnerColumn,
+                           TaskProgressColumn, TextColumn)
+from tenacity import (RetryError, retry, retry_if_exception_type,
+                      stop_after_attempt, wait_exponential)
 
 console = Console()
 
@@ -229,6 +225,8 @@ class UsersConfig(BaseModel):
 class AppConfig(BaseModel):
     """Application config including workspace and multiple users."""
 
+    model_config = {"defer_build": True}
+
     workspace: SlackWorkspace
     users: list[SlackUser]
     default_user: str | None = None
@@ -311,13 +309,17 @@ def _assign_users_to_ai_messages(app_config: AppConfig, messages: list[dict[str,
     """Mutate AI-generated messages to include explicit user fields.
 
     This ensures AI-generated runs actually post as multiple users when configured.
+    Also randomizes reply count (0-8) when using AI-generated messages.
     """
 
-    if len(app_config.users) <= 1:
-        return
+    has_multiple_users = len(app_config.users) > 1
+
+    # Track global reply index for round-robin across all messages
+    global_reply_idx = 0
 
     for msg_idx, msg in enumerate(messages):
-        if msg.get("user") is None:
+        # Assign user if multiple users configured
+        if has_multiple_users and msg.get("user") is None:
             if app_config.strategy == "random":
                 msg["user"] = random.choice(app_config.users).name
             else:
@@ -327,8 +329,15 @@ def _assign_users_to_ai_messages(app_config: AppConfig, messages: list[dict[str,
         if not isinstance(replies, list):
             continue
 
+        # Randomize reply count: pick 0-8 replies from available replies
+        # If fewer replies available, use all of them; if more, randomly sample
+        max_replies = random.randint(0, 8)
+        if len(replies) > max_replies:
+            replies = random.sample(replies, max_replies)
+        # If replies < max_replies, we just use all available replies
+
         normalized_replies: list[dict[str, Any]] = []
-        for reply_idx, reply in enumerate(replies):
+        for reply in replies:
             if isinstance(reply, str):
                 reply_obj: dict[str, Any] = {"text": reply}
             elif isinstance(reply, dict):
@@ -336,13 +345,16 @@ def _assign_users_to_ai_messages(app_config: AppConfig, messages: list[dict[str,
             else:
                 continue
 
-            if reply_obj.get("user") is None:
+            # Assign user to reply if multiple users configured
+            if has_multiple_users and reply_obj.get("user") is None:
                 if app_config.strategy == "random":
                     reply_obj["user"] = random.choice(app_config.users).name
                 else:
+                    # Use global reply index to ensure round-robin cycles through all users
                     reply_obj["user"] = app_config.users[
-                        (msg_idx + 1 + reply_idx) % len(app_config.users)
+                        global_reply_idx % len(app_config.users)
                     ].name
+                    global_reply_idx += 1
 
             normalized_replies.append(reply_obj)
 
@@ -547,7 +559,9 @@ def parse_rich_text_from_string(text: str) -> list[dict[str, Any]]:
             r"(`)([^`]+?)\9|"  # `code`
             r"(<(https?://[^|>]+)(?:\|([^>]+))?[^<]*>)|"  # <url|label> or <url>
             r"(https?://[^\s<>]+)|"  # Raw URLs
-            r"(:([a-z_0-9]+):)"  # :emoji_name:
+            r"(:([a-z_0-9]+):)|"  # :emoji_name:
+            r"(@(here|channel|everyone))\b|"  # @here, @channel, @everyone (broadcast)
+            r"(@([a-zA-Z0-9_.-]+))"  # @username mentions
         )
 
         pos = 0
@@ -591,6 +605,15 @@ def parse_rich_text_from_string(text: str) -> list[dict[str, Any]]:
                 emoji_name = match.group(16)
                 logger.debug(f"Found emoji: {emoji_name}")
                 elements.append({"type": "emoji", "name": emoji_name})
+            elif match.group(18):  # @here, @channel, @everyone (broadcast)
+                broadcast_type = match.group(18)
+                logger.debug(f"Found broadcast mention: @{broadcast_type}")
+                elements.append({"type": "broadcast", "range": broadcast_type})
+            elif match.group(19):  # @username mentions
+                username = match.group(20)
+                logger.debug(f"Found user mention: @{username}")
+                # Render as highlighted text since we don't have user IDs
+                elements.append({"type": "text", "text": f"@{username}", "style": {"bold": True}})  # type: ignore[dict-item]
 
             pos = match.end()
 
@@ -1516,8 +1539,55 @@ def main() -> None:
         )
     )
 
+    # Preview messages in logs
+    console.print("\n[bold blue]━━━ Message Preview ━━━[/bold blue]\n")
+    for i, msg_data in enumerate(messages, 1):
+        text = str(msg_data["text"])
+        msg_user = msg_data.get("user")
+        user_display = (
+            f"[bold magenta]@{msg_user}[/bold magenta]" if msg_user else "[dim]@default[/dim]"
+        )
+
+        # Main message
+        console.print(f"[bold cyan]#{i}[/bold cyan] {user_display}")
+        # Indent and format message text (truncate if very long)
+        preview_text = text[:200] + "..." if len(text) > 200 else text
+        console.print(f"    [white]{preview_text}[/white]")
+
+        # Show reactions if present
+        reactions = msg_data.get("reactions", [])
+        if reactions:
+            reaction_str = " ".join([f":{r.strip(':')}:" for r in reactions])
+            console.print(f"    [yellow]reactions:[/yellow] {reaction_str}")
+
+        # Show replies as thread
+        replies = msg_data.get("replies", [])
+        if replies:
+            console.print(
+                f"    [dim]└─ [bold]{len(replies)} repl{'y' if len(replies) == 1 else 'ies'}[/bold][/dim]"
+            )
+            for reply_idx, reply in enumerate(replies):
+                if isinstance(reply, str):
+                    reply_text = reply
+                    reply_user = None
+                else:
+                    reply_text = str(reply.get("text", ""))
+                    reply_user = reply.get("user")
+
+                reply_user_display = (
+                    f"[magenta]@{reply_user}[/magenta]" if reply_user else "[dim]@default[/dim]"
+                )
+                prefix = "└─" if reply_idx == len(replies) - 1 else "├─"
+                # Truncate long replies
+                reply_preview = reply_text[:150] + "..." if len(reply_text) > 150 else reply_text
+                console.print(
+                    f"       [dim]{prefix}[/dim] {reply_user_display}: [white]{reply_preview}[/white]"
+                )
+
+        console.print()  # Empty line between messages
+
     if args.dry_run:
-        console.print("\n[bold green]✓ Dry run complete - all validations passed[/bold green]")
+        console.print("[bold green]✓ Dry run complete - all validations passed[/bold green]")
         console.print(f"[cyan]Would post {total_posts} messages to Slack[/cyan]")
         return
 
@@ -1534,8 +1604,15 @@ def main() -> None:
         task = progress.add_task("[green]Posting messages...", total=len(messages))
 
         for i, msg_data in enumerate(messages, 1):
-            progress.update(task, description=f"[green]Message {i}/{len(messages)}")
             text = str(msg_data["text"])
+            msg_user = msg_data.get("user")
+            user_display = f"@{msg_user}" if msg_user else "@default"
+            preview_text = text[:80] + "..." if len(text) > 80 else text
+
+            progress.update(task, description=f"[green]Message {i}/{len(messages)}")
+            progress.console.print(
+                f"[bold cyan]#{i}[/bold cyan] [magenta]{user_display}[/magenta]: {preview_text}"
+            )
 
             forced_user = args.user
             message_user = msg_data.get("user")
@@ -1558,9 +1635,15 @@ def main() -> None:
                 if result:
                     success += 1
                     thread_ts = result["ts"]
+                    progress.console.print("    [green]✓[/green] Posted")
 
                     # Add AI-generated reactions first (if present)
                     ai_reactions = msg_data.get("reactions", [])
+                    if ai_reactions:
+                        reaction_display = " ".join([f":{r.strip(':')}:" for r in ai_reactions])
+                        progress.console.print(
+                            f"    [yellow]  + reactions:[/yellow] {reaction_display}"
+                        )
                     for reaction_emoji in ai_reactions:
                         try:
                             time.sleep(args.reaction_delay)
@@ -1582,6 +1665,9 @@ def main() -> None:
                     if not ai_reactions:
                         emoji_match = re.search(r":([a-z_0-9]+):", text)
                         if emoji_match:
+                            progress.console.print(
+                                f"    [yellow]  + reaction:[/yellow] :{emoji_match.group(1)}:"
+                            )
                             try:
                                 time.sleep(args.reaction_delay)
                                 add_reaction(
@@ -1617,6 +1703,16 @@ def main() -> None:
                             reply_user = app_config.select_user(
                                 name=reply_user_name,
                                 message_index=(i - 1) + 1 + reply_idx,
+                            )
+                            reply_user_display = (
+                                f"@{reply_user_name}" if reply_user_name else f"@{reply_user.name}"
+                            )
+                            reply_preview = (
+                                reply_text[:60] + "..." if len(reply_text) > 60 else reply_text
+                            )
+                            prefix = "└─" if reply_idx == len(replies) - 1 else "├─"
+                            progress.console.print(
+                                f"    [dim]{prefix}[/dim] [magenta]{reply_user_display}[/magenta]: {reply_preview}"
                             )
 
                             reply_request_config = _merge_request_config(app_config, reply_user)

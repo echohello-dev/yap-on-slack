@@ -289,3 +289,55 @@ class TestParseRichTextFromString:
             elem.get("text", "") for elem in result if elem.get("type") == "text"
         )
         assert "  " in text_content
+
+    # @mention tests
+    def test_broadcast_here(self):
+        """Test @here broadcast mention."""
+        result = parse_rich_text_from_string("Attention @here please check")
+        assert result == [
+            {"type": "text", "text": "Attention "},
+            {"type": "broadcast", "range": "here"},
+            {"type": "text", "text": " please check"},
+        ]
+
+    def test_broadcast_channel(self):
+        """Test @channel broadcast mention."""
+        result = parse_rich_text_from_string("@channel important update")
+        assert result == [
+            {"type": "broadcast", "range": "channel"},
+            {"type": "text", "text": " important update"},
+        ]
+
+    def test_broadcast_everyone(self):
+        """Test @everyone broadcast mention."""
+        result = parse_rich_text_from_string("Hey @everyone!")
+        assert result == [
+            {"type": "text", "text": "Hey "},
+            {"type": "broadcast", "range": "everyone"},
+            {"type": "text", "text": "!"},
+        ]
+
+    def test_user_mention(self):
+        """Test @username mention."""
+        result = parse_rich_text_from_string("cc @oncall")
+        assert result == [
+            {"type": "text", "text": "cc "},
+            {"type": "text", "text": "@oncall", "style": {"bold": True}},
+        ]
+
+    def test_user_mention_with_formatting(self):
+        """Test @username mention with other formatting."""
+        result = parse_rich_text_from_string("*FYI* @john-doe check this :rocket:")
+        assert result[0] == {"type": "text", "text": "FYI", "style": {"bold": True}}
+        assert result[1] == {"type": "text", "text": " "}
+        assert result[2] == {"type": "text", "text": "@john-doe", "style": {"bold": True}}
+        assert result[3] == {"type": "text", "text": " check this "}
+        assert result[4] == {"type": "emoji", "name": "rocket"}
+
+    def test_multiple_mentions(self):
+        """Test multiple user mentions."""
+        result = parse_rich_text_from_string("@alice @bob please review")
+        assert result[0] == {"type": "text", "text": "@alice", "style": {"bold": True}}
+        assert result[1] == {"type": "text", "text": " "}
+        assert result[2] == {"type": "text", "text": "@bob", "style": {"bold": True}}
+        assert result[3] == {"type": "text", "text": " please review"}

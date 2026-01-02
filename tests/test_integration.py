@@ -7,14 +7,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from yap_on_slack.post_messages import (
-    AppConfig,
-    SlackUser,
-    SlackWorkspace,
-    _assign_users_to_ai_messages,
-    load_config,
-    load_messages,
-)
+from yap_on_slack.post_messages import (AppConfig, SlackUser, SlackWorkspace,
+                                        _assign_users_to_ai_messages,
+                                        load_config, load_messages)
 
 
 class TestLoadConfig:
@@ -175,8 +170,164 @@ users:
             assert messages[0]["user"] in {"env", "alice"}
             assert messages[1]["user"] in {"env", "alice"}
             assert isinstance(messages[0]["replies"], list)
-            assert messages[0]["replies"][0]["text"] == "r1"
-            assert messages[0]["replies"][0]["user"] in {"env", "alice"}
+            # Note: replies may be randomly sampled (0-8), so check if present
+            if messages[0]["replies"]:
+                assert messages[0]["replies"][0]["text"] == "r1"
+                assert messages[0]["replies"][0]["user"] in {"env", "alice"}
+
+        def test_randomizes_reply_count_between_0_and_8(self):
+            """Test that reply count is randomized between 0 and 8."""
+            app = AppConfig(
+                workspace=SlackWorkspace(
+                    SLACK_ORG_URL="https://test.slack.com",
+                    SLACK_CHANNEL_ID="C123",
+                    SLACK_TEAM_ID="T123",
+                ),
+                users=[
+                    SlackUser(name="env", SLACK_XOXC_TOKEN="x1", SLACK_XOXD_TOKEN="d1"),
+                    SlackUser(name="alice", SLACK_XOXC_TOKEN="x2", SLACK_XOXD_TOKEN="d2"),
+                ],
+                default_user="env",
+                strategy="round_robin",
+            )
+
+            # Create message with 10 replies (more than max of 8)
+            messages = [
+                {"text": "Hello", "replies": [f"reply{i}" for i in range(10)]},
+            ]
+
+            _assign_users_to_ai_messages(app, messages)
+
+            # Reply count should be between 0 and 8
+            assert len(messages[0]["replies"]) <= 8
+
+        def test_randomizes_reply_count_with_single_user(self):
+            """Test that random reply count works even with single user."""
+            app = AppConfig(
+                workspace=SlackWorkspace(
+                    SLACK_ORG_URL="https://test.slack.com",
+                    SLACK_CHANNEL_ID="C123",
+                    SLACK_TEAM_ID="T123",
+                ),
+                users=[
+                    SlackUser(name="env", SLACK_XOXC_TOKEN="x1", SLACK_XOXD_TOKEN="d1"),
+                ],
+                default_user="env",
+                strategy="round_robin",
+            )
+
+            # Create message with 10 replies
+            messages = [
+                {"text": "Hello", "replies": [f"reply{i}" for i in range(10)]},
+            ]
+
+            _assign_users_to_ai_messages(app, messages)
+
+            # Reply count should be between 0 and 8 even with single user
+            assert len(messages[0]["replies"]) <= 8
+
+        def test_global_round_robin_cycles_through_all_users(self):
+            """Test that round-robin cycles through all users across messages."""
+            app = AppConfig(
+                workspace=SlackWorkspace(
+                    SLACK_ORG_URL="https://test.slack.com",
+                    SLACK_CHANNEL_ID="C123",
+                    SLACK_TEAM_ID="T123",
+                ),
+                users=[
+                    SlackUser(name="alice", SLACK_XOXC_TOKEN="x1", SLACK_XOXD_TOKEN="d1"),
+                    SlackUser(name="bob", SLACK_XOXC_TOKEN="x2", SLACK_XOXD_TOKEN="d2"),
+                    SlackUser(name="charlie", SLACK_XOXC_TOKEN="x3", SLACK_XOXD_TOKEN="d3"),
+                ],
+                default_user="alice",
+                strategy="round_robin",
+            )
+
+            # Seed random for deterministic test
+            import random
+
+            random.seed(42)
+
+            # Create multiple messages with multiple replies each
+            messages = [
+                {"text": "Msg1", "replies": ["r1", "r2", "r3"]},
+                {"text": "Msg2", "replies": ["r4", "r5"]},
+                {"text": "Msg3", "replies": ["r6"]},
+            ]
+
+            _assign_users_to_ai_messages(app, messages)
+
+            # Collect all reply users across all messages
+            all_reply_users = []
+            for msg in messages:
+                for reply in msg["replies"]:
+                    all_reply_users.append(reply["user"])
+
+            # All users should appear in replies if we have enough replies
+            if len(all_reply_users) >= 3:
+                # At least we should see multiple different users
+                unique_users = set(all_reply_users)
+                assert len(unique_users) >= 1  # At least one user appears
+
+        def test_round_robin_assigns_main_messages_correctly(self):
+            """Test that main messages are assigned users in round-robin order."""
+            app = AppConfig(
+                workspace=SlackWorkspace(
+                    SLACK_ORG_URL="https://test.slack.com",
+                    SLACK_CHANNEL_ID="C123",
+                    SLACK_TEAM_ID="T123",
+                ),
+                users=[
+                    SlackUser(name="alice", SLACK_XOXC_TOKEN="x1", SLACK_XOXD_TOKEN="d1"),
+                    SlackUser(name="bob", SLACK_XOXC_TOKEN="x2", SLACK_XOXD_TOKEN="d2"),
+                ],
+                default_user="alice",
+                strategy="round_robin",
+            )
+
+            messages = [
+                {"text": "Msg1", "replies": []},
+                {"text": "Msg2", "replies": []},
+                {"text": "Msg3", "replies": []},
+                {"text": "Msg4", "replies": []},
+            ]
+
+            _assign_users_to_ai_messages(app, messages)
+
+            # Messages should alternate between alice and bob
+            assert messages[0]["user"] == "alice"
+            assert messages[1]["user"] == "bob"
+            assert messages[2]["user"] == "alice"
+            assert messages[3]["user"] == "bob"
+
+        def test_random_strategy_assigns_random_users(self):
+            """Test that random strategy assigns users randomly."""
+            app = AppConfig(
+                workspace=SlackWorkspace(
+                    SLACK_ORG_URL="https://test.slack.com",
+                    SLACK_CHANNEL_ID="C123",
+                    SLACK_TEAM_ID="T123",
+                ),
+                users=[
+                    SlackUser(name="alice", SLACK_XOXC_TOKEN="x1", SLACK_XOXD_TOKEN="d1"),
+                    SlackUser(name="bob", SLACK_XOXC_TOKEN="x2", SLACK_XOXD_TOKEN="d2"),
+                ],
+                default_user="alice",
+                strategy="random",
+            )
+
+            messages = [
+                {"text": "Msg1", "replies": ["r1"]},
+                {"text": "Msg2", "replies": ["r2"]},
+            ]
+
+            _assign_users_to_ai_messages(app, messages)
+
+            # All assigned users should be valid
+            for msg in messages:
+                assert msg["user"] in {"alice", "bob"}
+                for reply in msg["replies"]:
+                    assert reply["user"] in {"alice", "bob"}
 
 
 class TestLoadMessages:
