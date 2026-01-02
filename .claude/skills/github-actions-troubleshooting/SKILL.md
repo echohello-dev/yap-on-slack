@@ -57,21 +57,26 @@ echo $?  # Exit code (0 = success)
 
 ### 3. Get workflow run logs
 
-**Use GitHub CLI:**
+**Use GitHub CLI with output redirection (never use interactive mode):**
 
 ```bash
-# List recent workflow runs
-gh run list --workflow="<workflow-name>" --limit 5
+# List recent workflow runs with explicit output
+gh run list --workflow="<workflow-name>" --limit 5 --json status,conclusion,name,updatedAt
 
-# View the latest run
-gh run view
+# Get latest run ID
+LATEST_RUN=$(gh run list --workflow="<workflow-name>" --limit 1 --json databaseId --jq '.[0].databaseId')
 
-# View only failed jobs (most useful)
-gh run view --log-failed
+# View failed logs only (always with pipe, never interactive)
+gh run view $LATEST_RUN --log-failed | tee workflow-logs.txt
 
-# View specific run by ID
-gh run view <run-id> --log-failed
+# View specific run by ID with full output captured
+gh run view <run-id> --log-failed | tee workflow-logs.txt
+
+# Save logs for offline analysis
+gh run view <run-id> --log-failed > workflow-failure.log 2>&1
 ```
+
+**Important:** Always pipe output with `| tee` or `>` to capture logs. Never use `gh run view` without flags as it opens interactive mode.
 
 ### 4. Analyze the failure
 
