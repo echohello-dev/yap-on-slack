@@ -18,10 +18,14 @@ from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.progress import (BarColumn, Progress, SpinnerColumn,
-                           TaskProgressColumn, TextColumn)
-from tenacity import (RetryError, retry, retry_if_exception_type,
-                      stop_after_attempt, wait_exponential)
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 console = Console()
 
@@ -492,9 +496,7 @@ def get_github_context(config: dict[str, str]) -> dict[str, Any] | None:
                                 "number": i.get("number", 0),
                                 "repo": repo,
                                 "url": i.get("html_url", ""),
-                                "labels": [
-                                    label.get("name", "") for label in i.get("labels", [])
-                                ],
+                                "labels": [label.get("name", "") for label in i.get("labels", [])],
                             }
                             for i in issues_filtered
                         ]

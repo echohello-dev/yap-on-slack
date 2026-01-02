@@ -6,12 +6,17 @@ from unittest.mock import Mock, patch
 import httpx
 import pytest
 
-from yap_on_slack.post_messages import (InvalidMessageFormatError,
-                                        SlackAPIError, SlackNetworkError,
-                                        SlackRateLimitError, add_reaction,
-                                        load_config, load_messages,
-                                        parse_rich_text_from_string,
-                                        post_message)
+from yap_on_slack.post_messages import (
+    InvalidMessageFormatError,
+    SlackAPIError,
+    SlackNetworkError,
+    SlackRateLimitError,
+    add_reaction,
+    load_config,
+    load_messages,
+    parse_rich_text_from_string,
+    post_message,
+)
 
 
 class TestConfigValidation:
