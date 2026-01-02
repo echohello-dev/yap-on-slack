@@ -201,45 +201,68 @@ gh api /user/packages/container/yap-on-slack/versions
 
 ## Pro tips
 
-**Efficient log searching:**
+**Always capture output for analysis:**
 ```bash
-# Find errors quickly
-gh run view --log-failed 2>&1 | grep -A 10 "ERROR:"
+# Never use gh run view interactively - always pipe output
+gh run view <run-id> --log-failed > failure-logs.txt 2>&1
 
-# Find specific failure point
-gh run view --log-failed 2>&1 | grep -B 5 "module-not-found"
+# Find errors in captured logs
+grep -n "ERROR:" failure-logs.txt | head -20
 
-# Save logs for analysis
-gh run view --log-failed > failure-logs.txt
+# Search for specific patterns
+grep -B 5 "module-not-found" failure-logs.txt
+
+# Count occurrences
+grep -c "warning" failure-logs.txt
+
+# Save all workflow metadata
+gh run list --workflow="Build" --limit 10 --json status,conclusion,name,databaseId > workflow-history.json
 ```
 
-**Testing fixes locally first:**
+**Testing fixes locally with output:**
 ```bash
-# Always test Docker builds locally before pushing
+# Always capture Docker builds
 docker build -t test . 2>&1 | tee build.log
 
-# Check exit code
-echo $?  # 0 = success
+# Check exit code explicitly
+echo "Build exit code: $?"
 
-# Test specific commands from workflow
-mise run test
-mise run lint
+# Test specific commands from workflow with output capture
+mise run test 2>&1 | tee test-results.log
+mise run lint 2>&1 | tee lint-results.log
+```
+
+**Use jq for structured output:**
+```bash
+# Get just the run ID and status
+gh run list --workflow="Build" --limit 5 --json databaseId,status,conclusion --jq '.[] | "\(.databaseId): \(.status) - \(.conclusion)"'
+
+# Find latest failed run
+gh run list --limit 20 --json databaseId,conclusion --jq '.[] | select(.conclusion=="failure") | .databaseId' | head -1
 ```
 
 ## Anti-patterns to avoid
 
 ❌ **Don't:**
-- Push multiple rapid fixes without waiting for workflow results
-- Make changes without reading the logs first
+- Use interactive commands like `gh run view` without `--log-failed` flag
+- Skip output capture (`> file` or `| tee file`)
+- Run commands without redirecting stderr (`2>&1`)
+- Make changes without reading captured logs first
 - Guess at fixes without understanding the root cause
 - Skip local testing when possible
+- Push multiple rapid fixes without waiting for results
 
 ✅ **Do:**
+- Always pipe output with `| tee <filename>` or `> <filename>` for offline analysis
+- Capture both stdout and stderr with `2>&1`
+- Use `gh run view --log-failed` with output redirection to files
+- Use `--json` flags for structured, parseable output
+- Save logs for offline analysis and reference
 - Read logs thoroughly to understand the failure
 - Test locally before pushing (when possible)
 - Make incremental fixes (one issue at a time)
 - Use descriptive commit messages for each fix
-- Wait appropriate time between checks (use sleep)
+- Wait appropriate time between checks (use `sleep`)
 
 ## Summary checklist
 
