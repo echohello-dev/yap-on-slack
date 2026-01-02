@@ -1,0 +1,15 @@
+# Multi-user Slack sessions used for posting messages
+# - strategy: round_robin | random
+# - default_user: optional user name to prefer
+
+strategy: round_robin
+default_user: default
+
+users:
+  - name: alice
+    SLACK_XOXC_TOKEN: xoxc-...
+    SLACK_XOXD_TOKEN: xoxd-...
+
+  - name: bob
+    SLACK_XOXC_TOKEN: xoxc-...
+    SLACK_XOXD_TOKEN: xoxd-...

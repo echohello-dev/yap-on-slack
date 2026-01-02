@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from yap_on_slack.post_messages import (
+    AppConfig,
     InvalidMessageFormatError,
     SlackAPIError,
     SlackNetworkError,
@@ -27,7 +28,7 @@ class TestConfigValidation:
         with patch("yap_on_slack.post_messages.dotenv_values") as mock_dotenv:
             mock_dotenv.side_effect = FileNotFoundError("No .env file")
             with pytest.raises(ValueError, match="Cannot read .env file"):
-                load_config()
+                load_config(Path("/__nope__/users.yaml"))
 
     def test_load_config_missing_variables(self):
         """Test error when required environment variables are missing."""
@@ -37,7 +38,7 @@ class TestConfigValidation:
                 # Missing other required vars
             }
             with pytest.raises(ValueError, match="Missing required environment variables"):
-                load_config()
+                load_config(Path("/__nope__/users.yaml"))
 
     def test_load_config_invalid_url_format(self):
         """Test error when SLACK_ORG_URL has invalid format."""
@@ -50,7 +51,7 @@ class TestConfigValidation:
                 "SLACK_TEAM_ID": "T123",
             }
             with pytest.raises(ValueError, match="SLACK_ORG_URL must start with https://"):
-                load_config()
+                load_config(Path("/__nope__/users.yaml"))
 
     def test_load_config_success(self):
         """Test successful configuration loading."""
@@ -62,9 +63,11 @@ class TestConfigValidation:
                 "SLACK_CHANNEL_ID": "C123",
                 "SLACK_TEAM_ID": "T123",
             }
-            config = load_config()
-            assert config["SLACK_XOXC_TOKEN"] == "xoxc-test"
-            assert config["SLACK_ORG_URL"] == "https://test.slack.com"
+            app_config, env = load_config(Path("/__nope__/users.yaml"))
+            assert isinstance(app_config, AppConfig)
+            assert app_config.users[0].SLACK_XOXC_TOKEN == "xoxc-test"
+            assert app_config.workspace.SLACK_ORG_URL == "https://test.slack.com"
+            assert env["SLACK_ORG_URL"] == "https://test.slack.com"
 
 
 class TestMessageValidation:
@@ -139,7 +142,7 @@ class TestMessageValidation:
         messages = load_messages(messages_file)
         assert len(messages) == 1
         assert messages[0]["text"] == "Hello"
-        assert messages[0]["replies"] == ["World"]
+        assert messages[0]["replies"] == [{"text": "World", "user": None}]
 
     def test_load_messages_default_fallback(self):
         """Test loading default messages when file doesn't exist."""

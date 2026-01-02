@@ -7,7 +7,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from yap_on_slack.post_messages import load_config, load_messages
+from yap_on_slack.post_messages import (AppConfig, SlackUser, SlackWorkspace,
+                                        _assign_users_to_ai_messages,
+                                        load_config, load_messages)
 
 
 class TestLoadConfig:
@@ -32,13 +34,17 @@ class TestLoadConfig:
                     "SLACK_CHANNEL_ID": "C123",
                     "SLACK_TEAM_ID": "T123",
                 }
-                config = load_config()
+                app_config, env = load_config(Path("/__nope__/users.yaml"))
 
-                assert config["SLACK_XOXC_TOKEN"] == "xoxc-test"
-                assert config["SLACK_XOXD_TOKEN"] == "xoxd-test"
-                assert config["SLACK_ORG_URL"] == "https://test.slack.com"
-                assert config["SLACK_CHANNEL_ID"] == "C123"
-                assert config["SLACK_TEAM_ID"] == "T123"
+                assert app_config.workspace.SLACK_ORG_URL == "https://test.slack.com"
+                assert app_config.workspace.SLACK_CHANNEL_ID == "C123"
+                assert app_config.workspace.SLACK_TEAM_ID == "T123"
+
+                assert len(app_config.users) == 1
+                assert app_config.users[0].SLACK_XOXC_TOKEN == "xoxc-test"
+                assert app_config.users[0].SLACK_XOXD_TOKEN == "xoxd-test"
+
+                assert env["SLACK_ORG_URL"] == "https://test.slack.com"
         finally:
             Path(env_file).unlink(missing_ok=True)
 
@@ -52,7 +58,7 @@ class TestLoadConfig:
             }
 
             with pytest.raises(ValueError, match="Missing required environment variables"):
-                load_config()
+                load_config(Path("/__nope__/users.yaml"))
 
     def test_load_config_empty_values(self):
         """Test loading config with empty string values."""
@@ -66,7 +72,7 @@ class TestLoadConfig:
             }
 
             with pytest.raises(ValueError, match="Missing required environment variables"):
-                load_config()
+                load_config(Path("/__nope__/users.yaml"))
 
     def test_load_config_extra_vars_ignored(self):
         """Test that extra variables in .env are loaded but don't break config."""
@@ -80,9 +86,92 @@ class TestLoadConfig:
                 "EXTRA_VAR": "extra_value",  # Extra variable
             }
 
-            config = load_config()
-            assert "EXTRA_VAR" in config
-            assert len(config) == 6
+            _, env = load_config(Path("/__nope__/users.yaml"))
+            assert "EXTRA_VAR" in env
+            assert len(env) == 6
+
+        def test_load_config_from_yaml_users_file(self, tmp_path):
+            """Test loading multi-user config from a YAML file."""
+            users_file = tmp_path / "users.yaml"
+            users_file.write_text(
+                """
+strategy: round_robin
+default_user: alice
+users:
+    - name: alice
+        SLACK_XOXC_TOKEN: xoxc-alice
+        SLACK_XOXD_TOKEN: xoxd-alice
+    - name: bob
+        SLACK_XOXC_TOKEN: xoxc-bob
+        SLACK_XOXD_TOKEN: xoxd-bob
+""".lstrip()
+            )
+
+            with patch("yap_on_slack.post_messages.dotenv_values") as mock_dotenv:
+                mock_dotenv.return_value = {
+                    "SLACK_XOXC_TOKEN": "xoxc-env",
+                    "SLACK_XOXD_TOKEN": "xoxd-env",
+                    "SLACK_USER_NAME": "env",
+                    "SLACK_ORG_URL": "https://test.slack.com",
+                    "SLACK_CHANNEL_ID": "C123",
+                    "SLACK_TEAM_ID": "T123",
+                }
+
+                app_config, _ = load_config(users_file)
+                assert app_config.default_user == "alice"
+                assert app_config.strategy == "round_robin"
+                assert len(app_config.users) == 3
+                assert app_config.users[0].name == "env"
+                assert app_config.users[1].name == "alice"
+                assert app_config.users[2].name == "bob"
+
+        def test_load_config_missing_users_file_falls_back_to_env_user(self, tmp_path):
+            """If users.yaml is configured but missing, fall back to .env user."""
+            missing_users = tmp_path / "users.yaml"
+
+            with patch("yap_on_slack.post_messages.dotenv_values") as mock_dotenv:
+                mock_dotenv.return_value = {
+                    "SLACK_XOXC_TOKEN": "xoxc-env",
+                    "SLACK_XOXD_TOKEN": "xoxd-env",
+                    "SLACK_USER_NAME": "env",
+                    "SLACK_ORG_URL": "https://test.slack.com",
+                    "SLACK_CHANNEL_ID": "C123",
+                    "SLACK_TEAM_ID": "T123",
+                    "SLACK_USERS_FILE": str(missing_users),
+                }
+
+                app_config, _ = load_config()
+                assert len(app_config.users) == 1
+                assert app_config.users[0].name == "env"
+
+    class TestAiUserAssignment:
+        def test_assigns_users_to_ai_messages(self):
+            app = AppConfig(
+                workspace=SlackWorkspace(
+                    SLACK_ORG_URL="https://test.slack.com",
+                    SLACK_CHANNEL_ID="C123",
+                    SLACK_TEAM_ID="T123",
+                ),
+                users=[
+                    SlackUser(name="env", SLACK_XOXC_TOKEN="x1", SLACK_XOXD_TOKEN="d1"),
+                    SlackUser(name="alice", SLACK_XOXC_TOKEN="x2", SLACK_XOXD_TOKEN="d2"),
+                ],
+                default_user="env",
+                strategy="round_robin",
+            )
+
+            messages = [
+                {"text": "Hello", "replies": ["r1", "r2"]},
+                {"text": "Hi", "replies": []},
+            ]
+
+            _assign_users_to_ai_messages(app, messages)
+
+            assert messages[0]["user"] in {"env", "alice"}
+            assert messages[1]["user"] in {"env", "alice"}
+            assert isinstance(messages[0]["replies"], list)
+            assert messages[0]["replies"][0]["text"] == "r1"
+            assert messages[0]["replies"][0]["user"] in {"env", "alice"}
 
 
 class TestLoadMessages:
@@ -110,7 +199,7 @@ class TestLoadMessages:
 
                 assert len(messages) == 2
                 assert messages[0]["text"] == "Test message 1"
-                assert messages[0]["replies"] == ["Reply 1"]
+                assert messages[0]["replies"] == [{"text": "Reply 1", "user": None}]
 
     def test_load_messages_file_not_exists(self):
         """Test loading default messages when file doesn't exist."""
@@ -178,22 +267,39 @@ class TestMainFlow:
     """Integration tests for the main message posting flow."""
 
     @pytest.fixture
-    def config(self):
+    def app_env(self):
         """Provide test configuration."""
-        return {
+        app = AppConfig(
+            workspace=SlackWorkspace(
+                SLACK_ORG_URL="https://test-workspace.slack.com",
+                SLACK_CHANNEL_ID="C1234567890",
+                SLACK_TEAM_ID="T1234567890",
+            ),
+            users=[
+                SlackUser(
+                    name="default",
+                    SLACK_XOXC_TOKEN="xoxc-test-token",
+                    SLACK_XOXD_TOKEN="xoxd-test-token",
+                )
+            ],
+            default_user="default",
+            strategy="round_robin",
+        )
+        env = {
             "SLACK_XOXC_TOKEN": "xoxc-test-token",
             "SLACK_XOXD_TOKEN": "xoxd-test-token",
             "SLACK_ORG_URL": "https://test-workspace.slack.com",
             "SLACK_CHANNEL_ID": "C1234567890",
             "SLACK_TEAM_ID": "T1234567890",
         }
+        return app, env
 
     @patch("yap_on_slack.post_messages.httpx.post")
     @patch("yap_on_slack.post_messages.time.sleep")
     @patch("yap_on_slack.post_messages.load_config")
     @patch("yap_on_slack.post_messages.load_messages")
     def test_main_posts_all_messages(
-        self, mock_load_messages, mock_load_config, mock_sleep, mock_post, config
+        self, mock_load_messages, mock_load_config, mock_sleep, mock_post, app_env
     ):
         """Test that main function posts all messages including replies."""
         from yap_on_slack.post_messages import main
@@ -203,7 +309,7 @@ class TestMainFlow:
             {"text": "Message 2", "replies": []},
         ]
 
-        mock_load_config.return_value = config
+        mock_load_config.return_value = app_env
         mock_load_messages.return_value = test_messages
 
         mock_response = MagicMock()
@@ -223,14 +329,14 @@ class TestMainFlow:
     @patch("yap_on_slack.post_messages.load_config")
     @patch("yap_on_slack.post_messages.load_messages")
     def test_main_handles_api_failures_gracefully(
-        self, mock_load_messages, mock_load_config, mock_sleep, mock_post, config
+        self, mock_load_messages, mock_load_config, mock_sleep, mock_post, app_env
     ):
         """Test that main function handles API failures gracefully."""
         from yap_on_slack.post_messages import main
 
         test_messages = [{"text": "Message 1", "replies": []}]
 
-        mock_load_config.return_value = config
+        mock_load_config.return_value = app_env
         mock_load_messages.return_value = test_messages
 
         # Simulate API failure
@@ -248,14 +354,14 @@ class TestMainFlow:
     @patch("yap_on_slack.post_messages.load_config")
     @patch("yap_on_slack.post_messages.load_messages")
     def test_main_posts_replies_with_thread_ts(
-        self, mock_load_messages, mock_load_config, mock_sleep, mock_post, config
+        self, mock_load_messages, mock_load_config, mock_sleep, mock_post, app_env
     ):
         """Test that replies are posted with correct thread_ts."""
         from yap_on_slack.post_messages import main
 
         test_messages = [{"text": "Parent message", "replies": ["Reply 1", "Reply 2"]}]
 
-        mock_load_config.return_value = config
+        mock_load_config.return_value = app_env
         mock_load_messages.return_value = test_messages
 
         parent_ts = "1234567890.123456"
@@ -271,20 +377,22 @@ class TestMainFlow:
         for call in mock_post.call_args_list[1:]:
             data = call.kwargs.get("data", {})
             assert "thread_ts" in data
+            assert data["thread_ts"] == parent_ts
+            assert data["reply_broadcast"] == "false"
 
     @patch("yap_on_slack.post_messages.httpx.post")
     @patch("yap_on_slack.post_messages.time.sleep")
     @patch("yap_on_slack.post_messages.load_config")
     @patch("yap_on_slack.post_messages.load_messages")
     def test_main_adds_reactions_for_messages_with_emoji(
-        self, mock_load_messages, mock_load_config, mock_sleep, mock_post, config
+        self, mock_load_messages, mock_load_config, mock_sleep, mock_post, app_env
     ):
         """Test that reactions are added for messages containing emoji."""
         from yap_on_slack.post_messages import main
 
         test_messages = [{"text": "Deploy complete :rocket:", "replies": []}]
 
-        mock_load_config.return_value = config
+        mock_load_config.return_value = app_env
         mock_load_messages.return_value = test_messages
 
         mock_response = MagicMock()

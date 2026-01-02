@@ -1,8 +1,9 @@
 [
   {
     "text": "Hey team, I'm getting a *403* on the new dashboard. Has anyone else seen this? :thinking_face:",
+    "user": "alice",
     "replies": [
-      "Did you check if your token has the right scope?",
+      {"text": "Did you check if your token has the right scope?", "user": "bob"},
       "Also check the URL path - easy typo to make"
     ]
   },

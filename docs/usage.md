@@ -13,7 +13,7 @@
 
 Open up your Slack in your browser and login.
 
-> **Note**: You only need one of the following: an `xoxp-*` User OAuth token, an `xoxb-*` Bot token, or both `xoxc-*` and `xoxd-*` session tokens. User/Bot tokens are more secure and do not require a browser session. If multiple are provided, priority is `xoxp` > `xoxb` > `xoxc/xoxd`.
+> **Note**: This tool uses Slack *session tokens* from your browser session: `xoxc-*` plus the `d` cookie value (often starts with `xoxd-*`).
 
 ### Option 1: Using Session Tokens (Browser-based)
 
@@ -141,12 +141,15 @@ You can also use a Bot token instead of a User token:
 
 ### Finding Your Team ID
 
-**Method 1: Via Workspace Settings**
+**Method 1: Via DevTools Console (recommended)**
 
-1. Click your workspace name at the top-left
-2. Select "Settings & administration" → "Workspace settings"
-3. Look at the URL: `https://workspace.slack.com/admin/settings#team_id=T01234ABC56`
-4. The Team ID is in the URL (e.g., `T01234ABC56`)
+1. Open Slack in your browser: `https://your-workspace.slack.com`
+2. Open Developer Tools → **Console**
+3. Run:
+   ```js
+   window.boot_data.team_id
+   ```
+4. Copy the value (it starts with `T`)
 
 **Method 2: Via API Inspector**
 
@@ -211,6 +214,7 @@ nano .env
 **Required Variables:**
 
 ```env
+SLACK_USER_NAME=default
 SLACK_XOXC_TOKEN=xoxc-1234567890-1234567890-1234567890-abcdef
 SLACK_XOXD_TOKEN=xoxd-abcdef123456
 SLACK_ORG_URL=https://your-workspace.slack.com
@@ -222,7 +226,50 @@ SLACK_TEAM_ID=T01234ABC56
 
 ```env
 LOG_LEVEL=INFO  # DEBUG, INFO, WARNING, ERROR
+
+# Optional: extra Slack cookies (advanced)
+# Some workspaces/sessions require additional cookies (e.g. `x`, `d-s`) besides `d`.
+# Provide them as a standard Cookie header string, e.g. "x=...; d-s=...".
+SLACK_COOKIES=
+
+# Optional multi-user config (YAML)
+# - If users.yaml/users.yml exists in the repo root, it will be auto-loaded.
+# - You can also point at a specific file:
+SLACK_USERS_FILE=users.yaml
+
+# Or provide the YAML inline:
+SLACK_USERS_YAML='{"users": []}'
 ```
+
+### Multi-user configuration (YAML)
+
+If you want multiple users posting into the same channel (different browser sessions), create a `users.yaml` in the project root (it is gitignored by default):
+
+```yaml
+strategy: round_robin  # or "random"
+users:
+  - name: alice
+    SLACK_XOXC_TOKEN: xoxc-...
+    SLACK_XOXD_TOKEN: xoxd-...
+  - name: bob
+    SLACK_XOXC_TOKEN: xoxc-...
+    SLACK_XOXD_TOKEN: xoxd-...
+```
+
+**How user selection works:**
+
+1. If `--user <name>` is passed on the command line, that user is used for all messages
+2. If a message/reply has a `"user": "<name>"` field in the JSON, that specific user is used
+3. Otherwise, the configured **strategy** is applied:
+   - `round_robin` (default): cycles through users in order (user 0, user 1, user 2, user 0, ...)
+   - `random`: picks a random user for each message/reply
+
+The `.env` user is always added to the user list as "default" (or `SLACK_USER_NAME` if set), so with the config above you'd have 3 users: default, alice, bob.
+
+**Notes:**
+- If `users.yaml` or `users.yml` exists in the project root, it's auto-loaded
+- If your `SLACK_XOXD_TOKEN` cookie contains URL-encoded characters (e.g. `%2F`), keep it as-is - the script handles it
+- Per-user `SLACK_COOKIES` can be set for users that need extra session cookies
 
 ### Custom Messages
 
@@ -232,16 +279,22 @@ Create a `messages.json` file (or use any name with `--messages` flag):
 [
   {
     "text": "Main message with *bold* and _italic_",
+    "user": "alice",
     "replies": [
       "First reply",
-      "Second reply"
+      {"text": "Second reply (as bob)", "user": "bob"}
     ]
   },
   {
-    "text": "Message without replies"
+    "text": "Message without explicit user - uses round-robin strategy"
   }
 ]
 ```
+
+**User assignment in messages:**
+- If `user` is specified on a message or reply, that user posts it
+- If `user` is omitted, the configured strategy (round_robin/random) determines the poster
+- With round-robin, the message index determines the user: message 0 → user 0, message 1 → user 1, etc.
 
 **Supported Formatting:**
 
@@ -321,6 +374,19 @@ mise run run -- --verbose
 mise run run -- --verbose --dry-run
 ```
 
+### Auth Debugging (safe/redacted)
+
+If you are seeing `invalid_auth`, you can print safe diagnostics (no tokens) to help confirm whether the request is being formed correctly:
+
+```bash
+mise run run -- --limit 1 --debug-auth
+```
+
+This prints:
+- Workspace host, team/channel IDs
+- Whether the cookie `d` value looks like an `xoxd-` and its length
+- Slack response `error` and request ID headers
+
 ### Combined Examples
 
 ```bash
@@ -346,6 +412,7 @@ mise run run -- --limit 1 --verbose
 - Tokens expired (session tokens expire after hours/days)
 - Wrong tokens copied
 - Tokens from different workspace
+- Wrong `SLACK_TEAM_ID`
 
 **Solutions:**
 ```bash
@@ -358,7 +425,15 @@ cat .env | grep SLACK_XOXD_TOKEN
 
 # Test with dry-run first
 mise run run -- --dry-run
+
+# If live posting fails, run with safe diagnostics
+mise run run -- --limit 1 --debug-auth
+
+# Test with a single user explicitly
+mise run run -- --limit 1 --user default --debug-auth
 ```
+
+**Technical note:** The script uses `application/x-www-form-urlencoded` encoding for Slack API requests. This is required for session token authentication - multipart/form-data encoding causes `invalid_auth` errors. See [ADR-0003](adrs/0003-slack-api-form-urlencoded.md) for details.
 
 #### 2. Channel Not Found
 
@@ -557,4 +632,7 @@ mise run run -- --limit 10  # Modify messages.json for next batch
 
 ---
 
-**Need more help?** Check the [README](../README.md) or review [ADR-0001](adrs/0001-slack-session-tokens.md) for context on token usage.
+**Need more help?** Check the [README](../README.md) or review the [ADRs](adrs/README.md) for design decisions:
+- [ADR-0001: Slack Session Tokens](adrs/0001-slack-session-tokens.md) - Why we use session tokens
+- [ADR-0002: Multi-User YAML Configuration](adrs/0002-multi-user-yaml-configuration.md) - How multi-user support works
+- [ADR-0003: Form-Urlencoded for Slack API](adrs/0003-slack-api-form-urlencoded.md) - Why we use form-urlencoded encoding

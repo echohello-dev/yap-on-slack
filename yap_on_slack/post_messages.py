@@ -5,27 +5,26 @@ import argparse
 import json
 import logging
 import os
+import random
 import re
 import subprocess
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import unquote, urlparse
 
 import httpx
+import yaml
 from dotenv import dotenv_values
 from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
+from rich.progress import (BarColumn, Progress, SpinnerColumn,
+                           TaskProgressColumn, TextColumn)
+from tenacity import (RetryError, retry, retry_if_exception_type,
+                      stop_after_attempt, wait_exponential)
 
 console = Console()
 
@@ -66,10 +65,74 @@ class InvalidMessageFormatError(Exception):
     pass
 
 
+def _print_auth_debug(
+    *,
+    endpoint: str,
+    config: dict[str, str],
+    cookies: dict[str, str] | None = None,
+    response: httpx.Response | None = None,
+    slack_result: dict[str, Any] | None = None,
+    note: str | None = None,
+) -> None:
+    """Print safe diagnostics for Slack auth debugging.
+
+    Intentionally does not print any token/cookie values.
+    """
+
+    org_url = config.get("SLACK_ORG_URL", "")
+    parsed = urlparse(org_url)
+    host = parsed.netloc or org_url
+
+    raw_d = config.get("SLACK_XOXD_TOKEN", "")
+    decoded_d = unquote(raw_d)
+
+    diagnostics: dict[str, Any] = {
+        "endpoint": endpoint,
+        "org_host": host,
+        "org_scheme": parsed.scheme or "(unknown)",
+        "team_id": config.get("SLACK_TEAM_ID", ""),
+        "channel_id": config.get("SLACK_CHANNEL_ID", ""),
+        "cookie_d_len": len(decoded_d),
+        "cookie_d_starts_with_xoxd": decoded_d.startswith("xoxd-"),
+        "cookie_d_was_urlencoded": decoded_d != raw_d,
+        "cookie_d_contains_percent": "%" in raw_d,
+    }
+
+    if cookies is not None:
+        diagnostics["cookie_keys"] = sorted(cookies.keys())
+
+    if note:
+        diagnostics["note"] = note
+
+    if response is not None:
+        diagnostics["http_status"] = response.status_code
+        # Helpful headers (safe to print)
+        for header_key in ("x-slack-req-id", "x-slack-backend", "retry-after"):
+            if header_key in response.headers:
+                diagnostics[header_key] = response.headers.get(header_key)
+
+    if slack_result is not None:
+        diagnostics["slack_ok"] = slack_result.get("ok")
+        diagnostics["slack_error"] = slack_result.get("error")
+        if "needed" in slack_result:
+            diagnostics["slack_needed"] = slack_result.get("needed")
+        if "provided" in slack_result:
+            diagnostics["slack_provided"] = slack_result.get("provided")
+
+    console.print(
+        Panel.fit(
+            json.dumps(diagnostics, indent=2, sort_keys=True),
+            title="[bold]Auth Debug[/bold]",
+            border_style="magenta",
+        )
+    )
+
+
 class MessageReply(BaseModel):
     """Schema for message reply."""
 
     text: str
+    user: str | None = None
 
     @field_validator("text")
     @classmethod
@@ -84,7 +147,8 @@ class Message(BaseModel):
     """Schema for Slack message."""
 
     text: str
-    replies: list[str] = []
+    user: str | None = None
+    replies: list[MessageReply] = []
 
     @field_validator("text")
     @classmethod
@@ -94,18 +158,199 @@ class Message(BaseModel):
             raise ValueError("Message text cannot be empty")
         return v
 
-    @field_validator("replies")
+    @field_validator("replies", mode="before")
     @classmethod
-    def validate_replies(cls, v: list[str]) -> list[str]:
-        """Validate replies are not empty."""
+    def validate_replies(cls, v: Any) -> list[MessageReply]:
+        """Validate replies are not empty and normalize their shape.
+
+        Accepts either:
+        - replies: ["text", ...]
+        - replies: [{"text": "...", "user": "alice"}, ...]
+        """
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            raise ValueError("Replies must be a list")
+
+        replies: list[MessageReply] = []
         for reply in v:
-            if not reply or not reply.strip():
-                raise ValueError("Reply text cannot be empty")
+            if isinstance(reply, str):
+                replies.append(MessageReply(text=reply))
+            elif isinstance(reply, dict):
+                replies.append(MessageReply(**reply))
+            else:
+                raise ValueError("Reply must be a string or object")
+        return replies
+
+
+class SlackUser(BaseModel):
+    """A Slack user session (xoxc/xoxd) used to post messages."""
+
+    name: str
+    SLACK_XOXC_TOKEN: str
+    SLACK_XOXD_TOKEN: str
+    SLACK_COOKIES: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("User name cannot be empty")
         return v
 
 
-def load_config() -> dict[str, str]:
-    """Load configuration from .env file with comprehensive validation."""
+class SlackWorkspace(BaseModel):
+    """Shared workspace config (org/channel/team)."""
+
+    SLACK_ORG_URL: str
+    SLACK_CHANNEL_ID: str
+    SLACK_TEAM_ID: str
+
+    @field_validator("SLACK_ORG_URL")
+    @classmethod
+    def org_url_is_https(cls, v: str) -> str:
+        if not v.startswith("https://"):
+            raise ValueError("SLACK_ORG_URL must start with https://")
+        return v
+
+
+class UsersConfig(BaseModel):
+    """Multi-user config file schema."""
+
+    users: list[SlackUser]
+    default_user: str | None = None
+    strategy: Literal["round_robin", "random"] = "round_robin"
+
+
+class AppConfig(BaseModel):
+    """Application config including workspace and multiple users."""
+
+    workspace: SlackWorkspace
+    users: list[SlackUser]
+    default_user: str | None = None
+    strategy: Literal["round_robin", "random"] = "round_robin"
+
+    def _user_index_by_name(self, name: str) -> int | None:
+        for idx, user in enumerate(self.users):
+            if user.name == name:
+                return idx
+        return None
+
+    def select_user(self, *, name: str | None, message_index: int) -> SlackUser:
+        """Select a user for a message.
+
+        If name is provided, use that specific user.
+        Otherwise, use the configured strategy (round_robin or random).
+        """
+        if not self.users:
+            raise ValueError("No users configured")
+
+        if name:
+            idx = self._user_index_by_name(name)
+            if idx is None:
+                raise ValueError(
+                    f"Unknown user '{name}'. Available: {', '.join(u.name for u in self.users)}"
+                )
+            return self.users[idx]
+
+        # No specific user requested - use strategy
+        if self.strategy == "random":
+            return random.choice(self.users)
+
+        # round_robin (default)
+        return self.users[message_index % len(self.users)]
+
+
+def _merge_request_config(app_config: AppConfig, user: SlackUser) -> dict[str, str]:
+    """Build the request config dict expected by Slack API helpers."""
+
+    merged = {
+        "SLACK_ORG_URL": app_config.workspace.SLACK_ORG_URL,
+        "SLACK_CHANNEL_ID": app_config.workspace.SLACK_CHANNEL_ID,
+        "SLACK_TEAM_ID": app_config.workspace.SLACK_TEAM_ID,
+        "SLACK_XOXC_TOKEN": user.SLACK_XOXC_TOKEN,
+        "SLACK_XOXD_TOKEN": user.SLACK_XOXD_TOKEN,
+    }
+    if user.SLACK_COOKIES:
+        merged["SLACK_COOKIES"] = user.SLACK_COOKIES
+    return merged
+
+
+def _parse_cookie_header(cookie_header: str) -> dict[str, str]:
+    cookies: dict[str, str] = {}
+    for part in cookie_header.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key:
+            cookies[key] = value
+    return cookies
+
+
+def _build_slack_cookies(config: dict[str, str]) -> dict[str, str]:
+    # Start with any additional cookies provided (e.g., x, d-s, b, etc.)
+    cookies: dict[str, str] = {}
+    extra = config.get("SLACK_COOKIES")
+    if extra:
+        cookies.update(_parse_cookie_header(extra))
+
+    # Always set/override the auth cookie `d` from SLACK_XOXD_TOKEN.
+    # Use the token directly - do not URL-decode as Slack expects the original value
+    cookies["d"] = config["SLACK_XOXD_TOKEN"]
+    return cookies
+
+
+def _assign_users_to_ai_messages(app_config: AppConfig, messages: list[dict[str, Any]]) -> None:
+    """Mutate AI-generated messages to include explicit user fields.
+
+    This ensures AI-generated runs actually post as multiple users when configured.
+    """
+
+    if len(app_config.users) <= 1:
+        return
+
+    for msg_idx, msg in enumerate(messages):
+        if msg.get("user") is None:
+            if app_config.strategy == "random":
+                msg["user"] = random.choice(app_config.users).name
+            else:
+                msg["user"] = app_config.users[msg_idx % len(app_config.users)].name
+
+        replies = msg.get("replies", [])
+        if not isinstance(replies, list):
+            continue
+
+        normalized_replies: list[dict[str, Any]] = []
+        for reply_idx, reply in enumerate(replies):
+            if isinstance(reply, str):
+                reply_obj: dict[str, Any] = {"text": reply}
+            elif isinstance(reply, dict):
+                reply_obj = dict(reply)
+            else:
+                continue
+
+            if reply_obj.get("user") is None:
+                if app_config.strategy == "random":
+                    reply_obj["user"] = random.choice(app_config.users).name
+                else:
+                    reply_obj["user"] = app_config.users[
+                        (msg_idx + 1 + reply_idx) % len(app_config.users)
+                    ].name
+
+            normalized_replies.append(reply_obj)
+
+        msg["replies"] = normalized_replies
+
+
+def load_config(users_path: Path | None = None) -> tuple[AppConfig, dict[str, str]]:
+    """Load configuration from .env plus optional multi-user config.
+
+    Returns:
+        (app_config, raw_env)
+    """
     logger.debug("Loading environment configuration from .env file")
     with console.status("[bold blue]Loading environment configuration...", spinner="dots"):
         try:
@@ -116,36 +361,141 @@ def load_config() -> dict[str, str]:
         time.sleep(0.2)
 
     # Convert to non-optional dict
-    config: dict[str, str] = {}
+    env: dict[str, str] = {}
     for key, value in raw_config.items():
         if value is not None:
-            config[key] = value
+            env[key] = value
 
-    required_vars = [
-        "SLACK_XOXC_TOKEN",
-        "SLACK_XOXD_TOKEN",
-        "SLACK_ORG_URL",
-        "SLACK_CHANNEL_ID",
-        "SLACK_TEAM_ID",
-    ]
-    missing = [var for var in required_vars if not config.get(var)]
+    # Workspace vars are always required
+    required_workspace_vars = ["SLACK_ORG_URL", "SLACK_CHANNEL_ID", "SLACK_TEAM_ID"]
+    missing_workspace = [var for var in required_workspace_vars if not env.get(var)]
 
-    if missing:
+    if missing_workspace:
         console.print("[bold red]✗ Missing required environment variables:[/bold red]")
-        for var in missing:
+        for var in missing_workspace:
             console.print(f"  [red]- {var}[/red]")
             logger.error(f"Missing required environment variable: {var}")
-        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+        raise ValueError(f"Missing required environment variables: {', '.join(missing_workspace)}")
 
-    # Validate URL format
-    org_url = config["SLACK_ORG_URL"]
-    if not org_url.startswith("https://"):
-        logger.error(f"Invalid SLACK_ORG_URL format: {org_url}")
-        raise ValueError("SLACK_ORG_URL must start with https://")
+    # Validate URL format via model
+    workspace = SlackWorkspace(
+        SLACK_ORG_URL=env["SLACK_ORG_URL"],
+        SLACK_CHANNEL_ID=env["SLACK_CHANNEL_ID"],
+        SLACK_TEAM_ID=env["SLACK_TEAM_ID"],
+    )
 
-    logger.info("All required environment variables loaded successfully")
-    console.print("[bold green]✓ All required environment variables loaded[/bold green]")
-    return config
+    users_config_yaml = env.get("SLACK_USERS_YAML")
+    # Back-compat (deprecated): JSON string payload
+    users_config_json = env.get("SLACK_USERS_JSON")
+    users_file_env = env.get("SLACK_USERS_FILE")
+
+    # Always require a default user from .env, and always use it as the fallback
+    required_token_vars = ["SLACK_XOXC_TOKEN", "SLACK_XOXD_TOKEN"]
+    missing_tokens = [var for var in required_token_vars if not env.get(var)]
+    if missing_tokens:
+        console.print("[bold red]✗ Missing required environment variables:[/bold red]")
+        for var in missing_tokens:
+            console.print(f"  [red]- {var}[/red]")
+            logger.error(f"Missing required environment variable: {var}")
+        raise ValueError(
+            "Missing required environment variables: "
+            + ", ".join(missing_workspace + missing_tokens)
+        )
+
+    env_user_name = env.get("SLACK_USER_NAME", "default")
+    users: list[SlackUser] = [
+        SlackUser(
+            name=env_user_name,
+            SLACK_XOXC_TOKEN=env["SLACK_XOXC_TOKEN"],
+            SLACK_XOXD_TOKEN=env["SLACK_XOXD_TOKEN"],
+            SLACK_COOKIES=env.get("SLACK_COOKIES"),
+        )
+    ]
+    default_user: str | None = env_user_name
+    strategy: Literal["round_robin", "random"] = "round_robin"
+
+    users_file = users_path or (Path(users_file_env) if users_file_env else None)
+    if users_file is None:
+        # Convenience: if a local users.yaml/users.yml exists, load it automatically.
+        for candidate in (Path("users.yaml"), Path("users.yml")):
+            if candidate.exists():
+                users_file = candidate
+                break
+    if users_file is not None and not users_file.exists():
+        # If the config file doesn't exist, fall back to the .env user.
+        logger.info("Users config file not found (%s); using .env user only", users_file)
+        users_file = None
+
+    def _load_users_payload_from_file(path: Path) -> dict[str, Any]:
+        suffix = path.suffix.lower()
+        raw = path.read_text()
+
+        if suffix in {".yaml", ".yml"}:
+            payload = yaml.safe_load(raw)
+        elif suffix == ".json":
+            payload = json.loads(raw)
+        else:
+            # Default to YAML, but fall back to JSON
+            try:
+                payload = yaml.safe_load(raw)
+            except Exception:
+                payload = json.loads(raw)
+
+        if not isinstance(payload, dict):
+            raise ValueError("Users config must be a mapping/object at the top level")
+        return payload
+
+    if users_config_yaml or users_config_json or users_file:
+        try:
+            if users_config_yaml:
+                loaded = yaml.safe_load(users_config_yaml)
+                if not isinstance(loaded, dict):
+                    raise ValueError("SLACK_USERS_YAML must be a YAML mapping/object")
+                users_payload = loaded
+            elif users_config_json:
+                users_payload = json.loads(users_config_json)
+            else:
+                if users_file is None:
+                    raise ValueError("SLACK_USERS_FILE was not provided")
+                users_payload = _load_users_payload_from_file(users_file)
+
+            parsed = UsersConfig(**users_payload)
+            # Merge YAML/JSON users into the always-present .env user.
+            for u in parsed.users:
+                if u.name == env_user_name:
+                    raise ValueError(
+                        f"User '{env_user_name}' is defined in both .env and users config; rename one"
+                    )
+            users.extend(parsed.users)
+
+            # Keep parsed defaults as metadata, but missing per-message user always uses .env user.
+            if parsed.default_user is not None:
+                default_user = parsed.default_user
+            strategy = parsed.strategy
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid users config JSON: {e}") from e
+        except yaml.YAMLError as e:
+            raise ValueError(f"Invalid users config YAML: {e}") from e
+        except (OSError, ValidationError, TypeError) as e:
+            raise ValueError(f"Invalid users config: {e}") from e
+    # else: use .env user only
+
+    app_config = AppConfig(
+        workspace=workspace,
+        users=users,
+        default_user=default_user,
+        strategy=strategy,
+    )
+
+    logger.info(
+        "Configuration loaded successfully (%d user%s)",
+        len(app_config.users),
+        "s" if len(app_config.users) != 1 else "",
+    )
+    console.print(
+        f"[bold green]✓ Configuration loaded ({len(app_config.users)} user{'s' if len(app_config.users) != 1 else ''})[/bold green]"
+    )
+    return app_config, env
 
 
 def parse_rich_text_from_string(text: str) -> list[dict[str, Any]]:
@@ -282,7 +632,7 @@ def add_reaction(channel: str, timestamp: str, emoji: str, config: dict[str, str
         "name": emoji,
     }
 
-    cookies = {"d": config["SLACK_XOXD_TOKEN"]}
+    cookies = _build_slack_cookies(config)
     headers = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
     try:
@@ -300,6 +650,15 @@ def add_reaction(channel: str, timestamp: str, emoji: str, config: dict[str, str
             return True
 
         error = result.get("error", "unknown")
+
+        # Optional auth debugging (no secrets)
+        if config.get("__DEBUG_AUTH") == "1":
+            _print_auth_debug(
+                endpoint="reactions.add",
+                config=config,
+                response=response,
+                slack_result=result,
+            )
 
         # Handle rate limiting
         if error == "ratelimited":
@@ -322,6 +681,8 @@ def add_reaction(channel: str, timestamp: str, emoji: str, config: dict[str, str
 
     except (httpx.TimeoutException, httpx.NetworkError) as e:
         logger.error(f"Network error adding reaction: {e}")
+        if config.get("__DEBUG_AUTH") == "1":
+            _print_auth_debug(endpoint="reactions.add", config=config, note=f"network_error: {e}")
         raise SlackNetworkError(f"Network error: {e}") from e
     except (SlackRateLimitError, SlackAPIError):
         # Re-raise our custom exceptions
@@ -893,10 +1254,11 @@ def post_message(
         data["reply_broadcast"] = "false"
         data["thread_ts"] = thread_ts
 
-    cookies = {"d": config["SLACK_XOXD_TOKEN"]}
+    cookies = _build_slack_cookies(config)
     headers = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
     try:
+        # Use form-urlencoded like the working script (not multipart)
         response = httpx.post(
             f"{config['SLACK_ORG_URL']}/api/chat.postMessage",
             data=data,
@@ -911,6 +1273,17 @@ def post_message(
             return result
 
         error = result.get("error", "unknown")
+
+        # Optional auth debugging (no secrets)
+        if config.get("__DEBUG_AUTH") == "1":
+            _print_auth_debug(
+                endpoint="chat.postMessage",
+                config=config,
+                cookies=cookies,
+                response=response,
+                slack_result=result,
+                note=f"thread_ts={'yes' if thread_ts else 'no'}",
+            )
 
         # Handle rate limiting
         if error == "ratelimited":
@@ -933,6 +1306,10 @@ def post_message(
 
     except (httpx.TimeoutException, httpx.NetworkError) as e:
         logger.error(f"Network error posting message: {e}")
+        if config.get("__DEBUG_AUTH") == "1":
+            _print_auth_debug(
+                endpoint="chat.postMessage", config=config, note=f"network_error: {e}"
+            )
         raise SlackNetworkError(f"Network error: {e}") from e
     except (SlackRateLimitError, SlackAPIError):
         # Re-raise our custom exceptions
@@ -974,6 +1351,16 @@ Examples:
         help="Path to custom messages JSON file (default: messages.json)",
     )
     parser.add_argument(
+        "--users",
+        type=Path,
+        help="Path to users YAML config (overrides SLACK_USERS_FILE)",
+    )
+    parser.add_argument(
+        "--user",
+        type=str,
+        help="Force a specific user name for all top-level messages",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate configuration and messages without posting to Slack",
@@ -1012,6 +1399,11 @@ Examples:
         action="store_true",
         help="Generate messages using OpenRouter Gemini 3 Flash (requires OPENROUTER_API_KEY)",
     )
+    parser.add_argument(
+        "--debug-auth",
+        action="store_true",
+        help="Print safe (redacted) Slack request/response diagnostics on failures",
+    )
     return parser.parse_args()
 
 
@@ -1024,15 +1416,18 @@ def main() -> None:
         logger.setLevel(logging.DEBUG)
         logging.getLogger("httpx").setLevel(logging.DEBUG)
 
-    config = load_config()
+    app_config, env = load_config(args.users)
+    env_user_name = env.get("SLACK_USER_NAME", "default")
 
     # Try AI generation if requested
-    messages = None
+    messages: list[dict[str, Any]] | None = None
     if args.use_ai:
-        github_context = get_github_context(config)
-        messages = generate_messages_with_ai(config, github_context)
+        github_context = get_github_context(env)
+        messages = generate_messages_with_ai(env, github_context)
         if not messages:
             logger.warning("AI generation failed, falling back to default messages")
+        else:
+            _assign_users_to_ai_messages(app_config, messages)
 
     # Fall back to file or default messages
     if not messages:
@@ -1075,10 +1470,27 @@ def main() -> None:
 
         for i, msg_data in enumerate(messages, 1):
             progress.update(task, description=f"[green]Message {i}/{len(messages)}")
-            text = msg_data["text"]
+            text = str(msg_data["text"])
+
+            forced_user = args.user
+            message_user = msg_data.get("user")
+            # If --user is specified, use that; else if message has user field, use that;
+            # else pass None to let select_user use round-robin/random strategy
+            user_name = (
+                forced_user
+                if forced_user
+                else (str(message_user) if message_user else None)
+            )
+
+            posting_user = app_config.select_user(name=user_name, message_index=i - 1)
+            request_config = _merge_request_config(app_config, posting_user)
+
+            if args.debug_auth:
+                # A sentinel key so helpers can print diagnostics without changing function signatures.
+                request_config["__DEBUG_AUTH"] = "1"
 
             try:
-                result = post_message(text, config)
+                result = post_message(text, request_config)
 
                 if result:
                     success += 1
@@ -1090,7 +1502,10 @@ def main() -> None:
                         try:
                             time.sleep(args.reaction_delay)
                             add_reaction(
-                                config["SLACK_CHANNEL_ID"], thread_ts, emoji_match.group(1), config
+                                request_config["SLACK_CHANNEL_ID"],
+                                thread_ts,
+                                emoji_match.group(1),
+                                request_config,
                             )
                         except (SlackNetworkError, RetryError) as e:
                             logger.warning(f"Failed to add reaction after retries: {e}")
@@ -1098,10 +1513,35 @@ def main() -> None:
                             logger.warning(f"Rate limited adding reaction: {e}")
 
                     # Post replies
-                    for reply_text in msg_data.get("replies", []):
+                    replies = msg_data.get("replies", [])
+                    for reply_idx, reply in enumerate(replies):
                         time.sleep(args.reply_delay)
                         try:
-                            reply_result = post_message(reply_text, config, thread_ts=thread_ts)
+                            if isinstance(reply, str):
+                                reply_text = reply
+                                reply_user_name: str | None = None
+                            else:
+                                reply_text = str(reply.get("text", ""))
+                                reply_user_name = (
+                                    str(reply.get("user"))
+                                    if reply.get("user") is not None
+                                    else None
+                                )
+
+                            if not reply_text.strip():
+                                raise InvalidMessageFormatError("Reply text cannot be empty")
+
+                            reply_user = app_config.select_user(
+                                name=reply_user_name,
+                                message_index=(i - 1) + 1 + reply_idx,
+                            )
+
+                            reply_request_config = _merge_request_config(app_config, reply_user)
+                            if args.debug_auth:
+                                reply_request_config["__DEBUG_AUTH"] = "1"
+                            reply_result = post_message(
+                                reply_text, reply_request_config, thread_ts=thread_ts
+                            )
                             if reply_result:
                                 success += 1
                             else:

@@ -37,6 +37,10 @@ ENV/
 .env
 .env.local
 
+# Local multi-user config
+users.yaml
+users.yml
+
 # Testing
 .pytest_cache/
 .coverage
