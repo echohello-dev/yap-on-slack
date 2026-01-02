@@ -7,9 +7,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from yap_on_slack.post_messages import (AppConfig, SlackUser, SlackWorkspace,
-                                        _assign_users_to_ai_messages,
-                                        load_config, load_messages)
+from yap_on_slack.post_messages import (
+    AppConfig,
+    SlackUser,
+    SlackWorkspace,
+    _assign_users_to_ai_messages,
+    load_config,
+    load_messages,
+)
 
 
 class TestLoadConfig:

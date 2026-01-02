@@ -306,72 +306,168 @@ Create a `messages.json` file (or use any name with `--messages` flag):
 - `:emoji_name:` → Emoji (e.g., `:rocket:`)
 - `•` or `- ` → Bullet points
 
+## Installation
+
+### Install via pipx (recommended)
+
+```bash
+# Install globally
+pipx install yap-on-slack
+
+# Or directly from GitHub
+pipx install git+https://github.com/echohello-dev/yap-on-slack.git
+
+# Initialize config files
+yos init
+
+# Run
+yos run
+```
+
+### Install via pip
+
+```bash
+pip install yap-on-slack
+
+# Or from GitHub
+pip install git+https://github.com/echohello-dev/yap-on-slack.git
+
+yos init && yos run
+```
+
+### From source
+
+```bash
+git clone https://github.com/echohello-dev/yap-on-slack.git
+cd yap-on-slack
+mise run install
+mise run run
+```
+
+**CLI aliases:** `yos`, `yaponslack`, `yap-on-slack` - all work identically.
+
 ## Usage Examples
+
+### Initialize Configuration
+
+```bash
+# Create .env, users.yaml, and messages.json in current directory
+yos init
+
+# Force overwrite existing files
+yos init --force
+```
 
 ### Basic Usage
 
 ```bash
 # Use default messages.json
-mise run run
+yos run
 
-# Or with uv directly
-uv run python -m yap_on_slack.post_messages
+# Or with mise (from source)
+mise run run
 ```
 
 ### Custom Messages File
 
 ```bash
 # Use custom messages file
-mise run run -- --messages my-messages.json
+yos run --messages my-messages.json
 
 # Or absolute path
-mise run run -- --messages /path/to/messages.json
+yos run --messages /path/to/messages.json
 ```
 
 ### Dry Run (Validate Without Posting)
 
 ```bash
 # Test configuration and message validation
-mise run run -- --dry-run
+yos run --dry-run
 
 # With custom messages
-mise run run -- --dry-run --messages test-messages.json
+yos run --dry-run --messages test-messages.json
 ```
 
 ### Limit Number of Messages
 
 ```bash
 # Post only first 3 messages
-mise run run -- --limit 3
+yos run --limit 3
 
 # Useful for testing
-mise run run -- --limit 1 --dry-run
+yos run --limit 1 --dry-run
 ```
 
 ### Custom Delays
 
 ```bash
 # Slower posting (5s between messages)
-mise run run -- --delay 5
+yos run --delay 5
 
 # Faster replies (0.5s between)
-mise run run -- --reply-delay 0.5
+yos run --reply-delay 0.5
 
 # Instant reactions
-mise run run -- --reaction-delay 0.1
+yos run --reaction-delay 0.1
 
 # Combine all
-mise run run -- --delay 3 --reply-delay 1.5 --reaction-delay 0.8
+yos run --delay 3 --reply-delay 1.5 --reaction-delay 0.8
 ```
 
 ### Verbose Logging
 
 ```bash
 # Enable debug logging
-mise run run -- --verbose
+yos run --verbose
 
 # See detailed HTTP requests and responses
-mise run run -- --verbose --dry-run
+yos run --verbose --dry-run
+```
+
+### AI-Generated Messages
+
+Generate realistic, varied Slack conversations using AI (requires OpenRouter API key):
+
+```bash
+# Generate and post AI messages
+yos run --use-ai
+
+# Combine with limits
+yos run --use-ai --limit 10
+
+# Dry run to preview generated messages
+yos run --use-ai --dry-run
+```
+
+**Setup:**
+1. Get an API key from [OpenRouter](https://openrouter.ai/)
+2. Add to your `.env`:
+   ```env
+   OPENROUTER_API_KEY=sk-or-v1-...
+   ```
+
+**What AI generates:**
+- **Varied tones**: From super casual ("yo anyone know why ci is failing lol") to formal announcements ("[ACTION REQUIRED]...")
+- **Varied lengths**: One-word reactions (":+1:", "thx") to detailed bug reports with code blocks
+- **GitHub-aware**: References real PRs, commits, and issues from your repos (if `gh` CLI is authenticated)
+- **Workflow errors**: Realistic CI/CD failures, build errors, deployment issues
+- **Rich formatting**: Bullet points, numbered lists, code blocks, blockquotes, slackmoji
+- **Natural conversations**: Multi-reply threads with debugging back-and-forth
+- **Reactions**: AI suggests appropriate emoji reactions for messages
+
+**GitHub Context:**
+If you have `gh` CLI installed and authenticated, or set `GITHUB_TOKEN`, the AI will reference your actual repositories:
+- Recent commits and their messages
+- Open/merged PRs with links
+- Issues with labels and status
+- Workflow run failures
+
+```bash
+# Check if gh is authenticated
+gh auth status
+
+# Or set token explicitly
+export GITHUB_TOKEN=ghp_...
 ```
 
 ### Auth Debugging (safe/redacted)
@@ -379,7 +475,7 @@ mise run run -- --verbose --dry-run
 If you are seeing `invalid_auth`, you can print safe diagnostics (no tokens) to help confirm whether the request is being formed correctly:
 
 ```bash
-mise run run -- --limit 1 --debug-auth
+yos run --limit 1 --debug-auth
 ```
 
 This prints:
@@ -391,13 +487,16 @@ This prints:
 
 ```bash
 # Test run with custom messages, limited count
-mise run run -- --messages test.json --limit 2 --dry-run
+yos run --messages test.json --limit 2 --dry-run
 
 # Production run with slower delays
-mise run run -- --delay 5 --reply-delay 2 --reaction-delay 1
+yos run --delay 5 --reply-delay 2 --reaction-delay 1
 
 # Quick test of first message only
-mise run run -- --limit 1 --verbose
+yos run --limit 1 --verbose
+
+# Force a specific user for all messages
+yos run --user alice --limit 5
 ```
 
 ## Troubleshooting
@@ -424,13 +523,13 @@ cat .env | grep SLACK_XOXC_TOKEN
 cat .env | grep SLACK_XOXD_TOKEN
 
 # Test with dry-run first
-mise run run -- --dry-run
+yos run --dry-run
 
 # If live posting fails, run with safe diagnostics
-mise run run -- --limit 1 --debug-auth
+yos run --limit 1 --debug-auth
 
 # Test with a single user explicitly
-mise run run -- --limit 1 --user default --debug-auth
+yos run --limit 1 --user default --debug-auth
 ```
 
 **Technical note:** The script uses `application/x-www-form-urlencoded` encoding for Slack API requests. This is required for session token authentication - multipart/form-data encoding causes `invalid_auth` errors. See [ADR-0003](adrs/0003-slack-api-form-urlencoded.md) for details.
@@ -474,10 +573,10 @@ cat messages.json | jq .
 grep '""' messages.json
 
 # Use dry-run to test
-mise run run -- --messages messages.json --dry-run
+yos run --messages messages.json --dry-run
 
-# Start with example
-cp messages.json.example messages.json
+# Start with example (or run yos init)
+yos init
 ```
 
 #### 4. Network/Connection Issues
@@ -498,7 +597,7 @@ curl -I https://slack.com
 curl -I https://your-workspace.slack.com/api
 
 # Try with verbose logging
-mise run run -- --verbose
+yos run --verbose
 
 # Increase timeout (edit post_messages.py if needed)
 ```
@@ -514,13 +613,13 @@ mise run run -- --verbose
 **Solutions:**
 ```bash
 # Increase delays between messages
-mise run run -- --delay 5 --reply-delay 2
+yos run --delay 5 --reply-delay 2
 
 # Post fewer messages
-mise run run -- --limit 5
+yos run --limit 5
 
 # Wait before retrying
-sleep 60 && mise run run
+sleep 60 && yos run
 ```
 
 ### Debugging Steps
@@ -536,12 +635,15 @@ sleep 60 && mise run run
 
 2. **Test with Dry Run**
    ```bash
-   mise run run -- --dry-run --verbose
+   yos run --dry-run --verbose
    ```
 
 3. **Check Dependencies**
    ```bash
-   # Reinstall dependencies
+   # Reinstall with pipx
+   pipx reinstall yap-on-slack
+   
+   # Or from source
    mise run install
    
    # Verify Python version
@@ -561,7 +663,7 @@ sleep 60 && mise run run
    ```bash
    # Use only 1 message
    echo '[{"text": "Test message"}]' > test.json
-   mise run run -- --messages test.json --limit 1 --dry-run
+   yos run --messages test.json --limit 1 --dry-run
    ```
 
 ### Getting Help
@@ -615,7 +717,7 @@ docker run --rm \
 
 ```bash
 # Minimum delays (use with caution - may hit rate limits)
-mise run run -- --delay 1 --reply-delay 0.5 --reaction-delay 0.2
+yos run --delay 1 --reply-delay 0.5 --reaction-delay 0.2
 
 # Disable reactions (remove emojis from message text)
 # Or skip reaction logic by not including emojis
@@ -625,9 +727,9 @@ mise run run -- --delay 1 --reply-delay 0.5 --reaction-delay 0.2
 
 ```bash
 # Process messages in batches
-mise run run -- --limit 10  # First 10
+yos run --limit 10  # First 10
 # Wait a bit
-mise run run -- --limit 10  # Modify messages.json for next batch
+yos run --limit 10  # Modify messages.json for next batch
 ```
 
 ---

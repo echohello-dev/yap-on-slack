@@ -39,61 +39,104 @@ You'll need Slack credentials to post messages. We support multiple authenticati
 
 ### Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/echohello-dev/yap-on-slack.git
-cd yap-on-slack
+**Option 1: Install via pipx (recommended)**
 
-# Copy environment template
-cp .env.example .env
+```bash
+# Install globally with pipx
+pipx install yap-on-slack
+
+# Or install directly from GitHub
+pipx install git+https://github.com/echohello-dev/yap-on-slack.git
+
+# Initialize config files in current directory
+yos init
 
 # Edit .env with your credentials
 # See docs/usage.md for how to obtain each value
 nano .env
 
+# Run with default messages
+yos run
+```
+
+**Option 2: Install via pip**
+
+```bash
+pip install yap-on-slack
+
+# Or from GitHub
+pip install git+https://github.com/echohello-dev/yap-on-slack.git
+
+yos init && yos run
+```
+
+**Option 3: From source (development)**
+
+```bash
+# Clone the repository
+git clone https://github.com/echohello-dev/yap-on-slack.git
+cd yap-on-slack
+
 # Install dependencies
 mise run install
 
-# Run with default messages
+# Run with mise
 mise run run
 ```
+
+**CLI Aliases:** `yos`, `yaponslack`, `yap-on-slack`
 
 ## Usage
 
 ### Basic Commands
 
 ```bash
+# Initialize config files (.env, users.yaml, messages.json)
+yos init
+
 # Post default messages
-mise run run
+yos run
 
 # Use custom messages file
-mise run run -- --messages custom.json
+yos run --messages custom.json
 
 # Generate messages with AI (requires OPENROUTER_API_KEY)
-mise run run -- --use-ai
+yos run --use-ai
 
 # Dry run (validate without posting)
-mise run run -- --dry-run
+yos run --dry-run
 
 # Limit messages and add delays
-mise run run -- --limit 5 --delay 3
+yos run --limit 5 --delay 3
 
 # Verbose output for debugging
-mise run run -- --verbose
+yos run --verbose
+
+# Show version
+yos --version
 ```
 
-### CLI Options
+### CLI Commands
 
+**`yos init`** - Initialize configuration files
+- `--force, -f` - Overwrite existing files
+
+**`yos run`** - Post messages to Slack
 - `--messages PATH` - Custom messages JSON file
+- `--users PATH` - Custom users YAML config
+- `--user NAME` - Force specific user for all messages
 - `--use-ai` - Generate messages using OpenRouter Gemini 3 Flash
 - `--dry-run` - Validate without posting to Slack
 - `--limit N` - Post only first N messages
 - `--delay SECONDS` - Delay between messages (default: 2.0)
 - `--reply-delay SECONDS` - Delay between replies (default: 1.0)
 - `--reaction-delay SECONDS` - Delay before reactions (default: 0.5)
-- `--verbose` - Enable debug logging
+- `--verbose, -v` - Enable debug logging
+- `--debug-auth` - Print safe diagnostics on auth failures
 
-Run `mise run run -- --help` for full options.
+**`yos version`** - Show version information
+
+Run `yos --help` or `yos run --help` for full options.
 
 ## AI Message Generation
 
@@ -111,7 +154,7 @@ Generate realistic conversations using OpenRouter's Gemini 3 Flash model with op
    ```
 4. **Run with AI**:
    ```bash
-   mise run run -- --use-ai
+   yos run --use-ai
    ```
 
 When `--use-ai` is used:

@@ -2,18 +2,45 @@
 
 ## Purpose
 
-Simulate realistic Slack messages in channels for testing purposes. Single Python script that posts messages with formatting, replies, and reactions.
+Simulate realistic Slack messages in channels for testing purposes. Python CLI tool that posts messages with formatting, replies, and reactions.
 
 ## Architecture
 
-Simple Python tool with:
-- **yap_on_slack/post_messages.py** — Main script for posting Slack messages
+Python CLI tool with:
+- **yap_on_slack/cli.py** — CLI entry point (`yos`, `yaponslack`, `yap-on-slack`)
+- **yap_on_slack/post_messages.py** — Core message posting logic
 - **messages.json** (optional) — Custom message definitions
 - **.env** — Slack credentials and configuration
 
+## Installation
+
+```bash
+# Via pipx (recommended)
+pipx install yap-on-slack
+
+# Via pip
+pip install yap-on-slack
+
+# From GitHub URL
+pipx install git+https://github.com/echohello-dev/yap-on-slack.git
+
+# From source
+mise run install
+```
+
 ## Commands
 
-Use `mise run` for all tasks:
+**CLI commands** (after installation):
+
+```bash
+yos init            # Create config files (.env, users.yaml, messages.json)
+yos run             # Post messages to Slack
+yos run --dry-run   # Validate without posting
+yos run --use-ai    # Generate AI messages
+yos --version       # Show version
+```
+
+**Development commands** (use `mise run`):
 
 ```bash
 mise run install    # Install dependencies with uv
@@ -74,9 +101,10 @@ Published to GHCR: `ghcr.io/echohello-dev/yap-on-slack:latest`
 
 ## Development
 
-1. Copy `.env.example` to `.env` and add credentials
-2. Run `mise run install` to install dependencies
-3. Run `mise run run` to post messages
-4. Use `mise run lint` before committing
+1. Run `yos init` to create config files (or copy `.env.example` to `.env`)
+2. Edit `.env` and add credentials
+3. Run `mise run install` to install dependencies (from source)
+4. Run `yos run` or `mise run run` to post messages
+5. Use `mise run lint` before committing
 
 **Note**: This uses Slack session tokens (xoxc/xoxd), not bot tokens. Extract from browser dev tools.

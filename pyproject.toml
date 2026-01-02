@@ -22,6 +22,11 @@ dev = [
     "ruff>=0.14.10",
 ]
 
+[project.scripts]
+yaponslack = "yap_on_slack.cli:main"
+yap-on-slack = "yap_on_slack.cli:main"
+yos = "yap_on_slack.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
