@@ -1,0 +1,33 @@
+[tools]
+python = "3.13"
+
+[env]
+_.file = ".env"
+
+[tasks.install]
+description = "Install dependencies"
+run = "uv sync"
+
+[tasks.lint]
+description = "Run linter"
+run = "uv run ruff check ."
+
+[tasks.format]
+description = "Format code"
+run = "uv run ruff format ."
+
+[tasks.test]
+description = "Run tests"
+run = "uv run pytest"
+
+[tasks.run]
+description = "Run the message poster"
+run = "uv run python -m yap_on_slack.post_messages"
+
+[tasks.build]
+description = "Build Docker image"
+run = "docker build -t yap-on-slack ."
+
+[tasks.docker-run]
+description = "Run Docker container"
+run = "docker run --rm --env-file .env yap-on-slack"

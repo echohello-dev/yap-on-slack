@@ -1,0 +1,35 @@
+# Architecture Decision Records
+
+This directory contains Architecture Decision Records (ADRs) for yap-on-slack.
+
+## What is an ADR?
+
+An ADR is a document that captures an important architectural decision made along with its context and consequences.
+
+## When to write an ADR?
+
+Write an ADR when:
+- Introducing or replacing a major dependency
+- Making decisions that affect the project's architecture
+- Choosing between multiple viable approaches
+- Making decisions that are hard to reverse
+
+Don't write an ADR for:
+- Small refactors or bug fixes
+- Formatting or style changes
+- Routine maintenance
+
+## ADR Format
+
+Use the template in [0000-template.md](0000-template.md).
+
+## Status Definitions
+
+- **Proposed**: Under discussion
+- **Accepted**: Approved and implemented
+- **Deprecated**: No longer relevant but kept for history
+- **Superseded**: Replaced by a newer ADR
+
+## Index
+
+<!-- Add ADRs below in chronological order -->

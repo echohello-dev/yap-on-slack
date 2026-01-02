@@ -1,0 +1,36 @@
+[
+  {
+    "text": "Hey team, I'm getting a *403* on the new dashboard. Has anyone else seen this? :thinking_face:",
+    "replies": [
+      "Did you check if your token has the right scope?",
+      "Also check the URL path - easy typo to make"
+    ]
+  },
+  {
+    "text": "Quick question - what's our _data retention policy_ for logs?",
+    "replies": [
+      "90 days in hot storage, then 7 years in cold per policy"
+    ]
+  },
+  {
+    "text": "*Issue* in prod :bug:: Database timeout on user auth\n`TypeError: Cannot read property 'userId' of undefined`\nAnyone know what we deployed?",
+    "replies": [
+      "Did we change the auth middleware recently?",
+      "Yeah, I see it now. JWT decode is failing. Let me push a fix"
+    ]
+  },
+  {
+    "text": ":rocket: *heads up* - deploying _auth service v2.1_ to staging in 30min",
+    "replies": [
+      "thanks for the heads up! when's prod?",
+      "probably friday if no issues"
+    ]
+  },
+  {
+    "text": ":warning: *ATTENTION*: deprecating `/api/v1/users` endpoint _next month_. migrate to `/api/v2/users` asap",
+    "replies": [
+      "how long do we have?",
+      "until feb 15. best to do it early"
+    ]
+  }
+]
