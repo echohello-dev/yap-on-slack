@@ -1,13 +1,13 @@
 [project]
 name = "yap-on-slack"
-version = "0.1.0"
+version = "1.0.0"
 description = "Simulate realistic messages in Slack channels for testing purposes"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["httpx>=0.28.1", "python-dotenv>=1.0.1", "rich>=13.9.4"]
+dependencies = ["httpx>=0.28.1", "python-dotenv>=1.2.1", "rich>=14.2.0"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3.4", "pytest-asyncio>=0.25.2", "ruff>=0.8.4"]
+dev = ["pytest>=9.0.2", "pytest-asyncio>=1.3.0", "ruff>=0.14.10"]
 
 [build-system]
 requires = ["hatchling"]
