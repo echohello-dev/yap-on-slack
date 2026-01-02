@@ -109,15 +109,15 @@ error: Unsupported compiler -- at least C++11 support is needed!
 
 ### 5. Fix iteratively
 
-**Pattern: Fix → Commit → Push → Wait → Check**
+**Pattern: Fix → Commit → Push → Wait → Check (Always capture output)**
 
 ```bash
 # 1. Make a fix based on logs
 edit <file>
 
-# 2. Test locally if possible
-mise run test
-docker build -t test .
+# 2. Test locally if possible with output capture
+mise run test 2>&1 | tee test-output.log
+docker build -t test . 2>&1 | tee build.log
 
 # 3. Commit with descriptive message
 git add <file>
@@ -128,17 +128,22 @@ git push
 
 # 5. Wait for workflow to start
 sleep 15
-gh run list --workflow="Build" --limit 1
+gh run list --workflow="Build" --limit 1 --json status,conclusion,name
 
-# 6. Wait for completion and check status
+# 6. Wait for completion and check status (with output capture)
 sleep 90  # Typical build time
-gh run list --workflow="Build" --limit 1
+gh run list --workflow="Build" --limit 1 --json status,conclusion,name,updatedAt | tee workflow-status.json
 
-# 7. If failed, get logs and repeat
-gh run view --log-failed | grep -A 10 "ERROR:"
+# 7. If failed, get logs with output captured
+LATEST_RUN=$(gh run list --workflow="Build" --limit 1 --json databaseId --jq '.[0].databaseId')
+gh run view $LATEST_RUN --log-failed | tee workflow-failure.log
+grep -A 10 "ERROR:" workflow-failure.log
 ```
 
-**Important: Use timeouts and sleep commands**
+**Important: Capture all output to files**
+- Always pipe with `| tee <filename>` or `> <filename>` for offline analysis
+- Never use interactive commands (`gh run view` without flags)
+- Use `2>&1` to capture both stdout and stderr
 - Don't spam the API with rapid requests
 - `sleep 15` after push (wait for workflow to trigger)
 - `sleep 60-90` for builds to complete
