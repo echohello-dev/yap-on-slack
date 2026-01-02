@@ -32,23 +32,57 @@ Use descriptive, kebab-case names:
 
 ## Pinning action versions
 
-**Always pin GitHub Actions to specific commit SHAs**, not floating tags (`v3`, `v4`).
+**Always pin GitHub Actions to specific commit SHAs**, not floating tags (`v3`, `v4`) or minor versions (`v3.7.1`).
 
-### How to pin actions
+### Why pin to commit SHAs?
 
-1. Find the action in GitHub Marketplace or on GitHub
-2. Use the commit SHA for a specific version
-3. Pin as: `uses: owner/action@<commit-sha> # <version>`
+- **Security**: Prevents tag hijacking attacks where malicious actors could modify tags
+- **Reproducibility**: Ensures exact same action code runs every time
+- **Explicit dependencies**: Makes it clear what version is actually being used
+- **Auditability**: Easy to review exactly what code is being executed
 
-Example:
+### How to pin actions to commit SHAs
+
+1. **Find the latest version** using git ls-remote:
+   ```bash
+   git ls-remote --tags --refs https://github.com/owner/action.git | grep -E 'v3\.' | tail -5
+   ```
+
+2. **Get the commit SHA** for the desired version tag
+
+3. **Pin with SHA and version comment**:
+   ```yaml
+   - uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
+   ```
+
+### Example: Pinning all actions in a workflow
+
 ```yaml
-- uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+- uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+- name: Setup mise
+  uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+
+- name: Set up Docker Buildx
+  uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
+
+- name: Login to GitHub Container Registry
+  uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3.6.0
+
+- name: Extract metadata
+  uses: docker/metadata-action@318604b99e75e41977312d83839a89be02ca4893 # v5.9.0
+
+- name: Build and push
+  uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
 ```
 
-Benefits:
-- Prevents unexpected behavior from action updates
-- Makes dependencies explicit and auditable
-- Improves security and reproducibility
+### Updating pinned actions
+
+To update to a new version:
+
+1. Find the new commit SHA for the desired version
+2. Update both the SHA and the version comment
+3. Test the workflow in a branch before merging
 
 ## Workflow structure best practices
 
@@ -163,8 +197,9 @@ Use `mise` commands (not direct tool invocations) for consistency with local dev
 Before committing a workflow:
 
 - [ ] Workflow file named descriptively (kebab-case)
-- [ ] All external actions pinned to commit SHAs (not tags)
-- [ ] Permissions explicitly defined
+- [ ] All external actions pinned to commit SHAs with version comments (e.g., `@sha # v1.2.3`)
+- [ ] Used `git ls-remote` to verify commit SHAs match latest stable versions
+- [ ] Permissions explicitly defined (minimal required permissions)
 - [ ] Concurrency set up (if applicable)
 - [ ] Tests/linting run before build jobs
 - [ ] Artifacts uploaded with retention policy (if applicable)
