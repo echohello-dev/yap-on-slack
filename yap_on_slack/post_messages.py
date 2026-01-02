@@ -21,10 +21,14 @@ from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.progress import (BarColumn, Progress, SpinnerColumn,
-                           TaskProgressColumn, TextColumn)
-from tenacity import (RetryError, retry, retry_if_exception_type,
-                      stop_after_attempt, wait_exponential)
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 console = Console()
 
@@ -910,56 +914,110 @@ def generate_messages_with_ai(
 
     # Build prompt with GitHub context if available
     base_prompt = """Generate 20 realistic Slack channel messages for an engineering team support channel.
-Messages should include:
-- Technical questions and troubleshooting
-- Status updates and announcements
-- Deployment notices
-- Deprecation warnings
-- Casual but professional tone (semi-formal)
-- Some typos and natural language variation
-- Minimal emoji use with :emoji_name: syntax (e.g., :rocket:, :warning:, :wave:)
-- Links with format <url|label> for URLs
-- Formatting: use *bold*, _italic_, ~strikethrough~, `code` for inline code
-- Bullet points with • or - prefix
-- Mix of quick questions, detailed issues, and team coordination
-- Each message has 0-3 replies
 
-IMPORTANT: Use markdown-like formatting in text:
-- *bold text* for emphasis
-- _italic text_ for secondary emphasis
-- `code` for technical terms
-- <https://example.com|link text> for URLs
-- :emoji_name: for emojis
+## CRITICAL: Tone and Length Variety
+Messages MUST vary dramatically in tone and length:
+
+**Tone spectrum** (use all of these across messages):
+- Super casual: "yo anyone know why ci is failing lol", "thx!", "lgtm ship it"
+- Casual: "hey quick q - where's the config for...", "np, happy to help"
+- Normal: "I'm seeing an issue with the auth flow. Has anyone encountered this?"
+- Professional: "Team, please be advised that we'll be performing scheduled maintenance..."
+- Formal announcements: "*[ACTION REQUIRED]* All teams must migrate to v2 API by EOQ"
+
+**Length spectrum** (use all of these):
+- One-word/emoji only: ":+1:", "thx", "lgtm", ":eyes:", "noted"
+- Quick one-liners: "anyone else seeing 503s?", "nvm figured it out"
+- Medium (2-3 sentences): Standard questions and updates
+- Detailed (paragraph with bullets/code): Complex issues, announcements, guides
+
+## Message Types to Include
+1. **Quick acknowledgments** (just reactions or 1-2 words)
+2. **General support questions**: "how do I...", "where can I find...", "what's the best way to..."
+3. **GitHub-specific discussions**: PR reviews, commit questions, code changes, merge conflicts
+4. **CI/CD and workflow issues**: Failed actions, build errors, deployment problems
+5. **Incident response**: Outages, errors, postmortems
+6. **Announcements**: Deprecations, releases, maintenance windows
+7. **Casual team chat**: Quick kudos, jokes, offtopic-ish comments
+
+## GitHub Actions / Workflow Errors (include several of these)
+Reference actual workflow failures with realistic error messages:
+- ":x: *Workflow failed*: `build.yml` on `main` - `npm ERR! peer dep issue`"
+- "anyone know why the *deploy-prod* action keeps timing out? been stuck for 3 runs now"
+- ":rotating_light: CI broken on <PR link> - `Error: Process completed with exit code 1`"
+- "the `lint` step is failing with `eslint: command not found` - did someone update the runner?"
+
+## Slack Formatting (use extensively and varied)
+- *bold* for emphasis
+- _italic_ for secondary emphasis or quotes
+- ~strikethrough~ for corrections/outdated info
+- `inline code` for commands, file names, variables
+- Code blocks with triple backticks for multi-line code/logs
 - • bullet points for lists
+- 1. 2. 3. numbered lists for steps
+- > blockquotes for quoting others or logs
+- <https://url.com|link text> for links
+- :emoji_name: for slackmoji (use varied ones: :rocket:, :fire:, :eyes:, :pray:, :100:, :tada:, :thinking_face:, :face_palm:, :sob:, :muscle:, :white_check_mark:, :x:, :warning:, :rotating_light:, :bug:, :hammer_and_wrench:, :ship:, :memo:, :bulb:, :wave:, :coffee:, :thumbsup:, :thumbsdown:, :heart:)
 
-Example: "*Issue*: _Database timeout_ on <https://github.com|PR#123>. `SELECT` query taking 30s :warning:"
+## Reply Patterns
+- Some messages should have NO replies
+- Some should have just ":+1:" or "thx" type replies
+- Some should have back-and-forth debugging conversations
+- Some should have multiple people chiming in with suggestions
+- Include natural typos and casual language in replies
+
+## Examples of Good Variety
+
+CASUAL: "yo :wave: anyone know if the staging db is up? getting connection refused"
+REPLY: "yeah was down for backups, should be back now"
+REPLY: "confirmed, just tested :+1:"
+
+PROFESSIONAL: "*[Scheduled Maintenance Notice]*\nThe production database cluster will undergo maintenance:\n• *When*: Saturday 2am-4am PST\n• *Impact*: Read-only mode for 30 minutes\n• *Action*: No action required, but avoid large writes during this window\n\ncc @oncall"
+
+QUICK: ":eyes:"
+REPLY: "lol"
+
+DETAILED ISSUE:
+":bug: *Bug Report*: User sessions expiring prematurely\n\n*Steps to reproduce*:\n1. Login to dashboard\n2. Wait 5 minutes (no activity)\n3. Session expires (should be 30min)\n\n*Expected*: 30min timeout\n*Actual*: ~5min timeout\n\n`JWT_EXPIRY` looks correct in config. Anyone seen this before?"
+
+WORKFLOW ERROR:
+":x: `deploy-production` failed on <https://github.com/org/repo/actions/runs/12345|run #456>\n```\nError: Container action is not supported on macOS\n```\nwhoops, wrong runner matrix :face_palm:"
+
+ONE-LINER: "nvm found it in the docs"
+
+ANNOUNCEMENT: "hey all :mega: quick reminder that `/api/v1/*` endpoints are *deprecated* and will be removed next sprint. please migrate to v2 - docs here: <https://docs.example.com/v2|API v2 Guide>"
 """
 
     if github_context:
-        context_str = "Use this real project context when generating messages. Reference actual repos, PRs, and issues:\n"
+        context_str = "\n\n## REAL PROJECT CONTEXT (USE THIS!)\nYou have access to real GitHub data from the user's repos. HEAVILY reference this in your messages:\n"
         if github_context.get("commits"):
-            context_str += "\nRecent commits (repos touched):\n"
-            for c in github_context["commits"][:3]:
-                context_str += f"- {c['message'][:60]} ({c['repo']})\n"
+            context_str += "\n### Recent Commits (reference these!):\n"
+            for c in github_context["commits"][:5]:
+                context_str += f"- `{c['message'][:60]}` in *{c['repo']}* by _{c['author']}_\n"
         if github_context.get("prs"):
-            context_str += "\nRecent PRs to reference:\n"
-            for pr in github_context["prs"][:3]:
+            context_str += "\n### Open/Recent PRs (discuss, review, question these!):\n"
+            for pr in github_context["prs"][:5]:
                 url = pr.get("url", "")
-                context_str += f"- #{pr['number']}: {pr['title']} ({pr['state']}) - <{url}>\n"
+                context_str += (
+                    f"- <{url}|#{pr['number']}: {pr['title']}> ({pr['state']}) by @{pr['author']}\n"
+                )
         if github_context.get("issues"):
-            context_str += "\nRecent issues to reference:\n"
-            for issue in github_context["issues"][:3]:
+            context_str += "\n### Issues (ask about, update, close these!):\n"
+            for issue in github_context["issues"][:5]:
                 url = issue.get("url", "")
                 labels = ", ".join(issue["labels"]) if issue["labels"] else "no labels"
-                context_str += f"- #{issue['number']}: {issue['title']} ({labels}) - <{url}>\n"
+                context_str += f"- <{url}|#{issue['number']}: {issue['title']}> [{labels}]\n"
 
-        context_str += "\n\nWhen generating messages:\n"
-        context_str += "- Reference actual PR/issue numbers and URLs from the context above\n"
-        context_str += "- Use raw GitHub URLs like https://github.com/owner/repo/issues/123\n"
-        context_str += "- Include actual commit messages and PR titles from your repos\n"
+        context_str += "\n### How to use this context:\n"
+        context_str += "- Reference ACTUAL PR numbers and URLs from above\n"
+        context_str += "- Discuss real commit messages (ask questions, give feedback)\n"
+        context_str += "- Mention real issues that need attention\n"
         context_str += (
-            "- Make questions/discussions specific to the repos and issues you actually work on\n"
+            "- Include workflow run links like https://github.com/owner/repo/actions/runs/123\n"
         )
+        context_str += "- Ask about specific code changes from PRs\n"
+        context_str += "- Discuss merge conflicts, review comments, CI failures on these PRs\n"
+        context_str += "- Create realistic support threads around this actual project context\n"
 
         prompt = base_prompt + "\n\n" + context_str
         logger.debug("AI prompt includes GitHub context")
@@ -973,18 +1031,26 @@ Example: "*Issue*: _Database timeout_ on <https://github.com|PR#123>. `SELECT` q
         "properties": {
             "messages": {
                 "type": "array",
-                "description": "Array of Slack messages",
+                "description": "Array of Slack messages with varied tone and length",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "text": {"type": "string", "description": "The main message text"},
+                        "text": {
+                            "type": "string",
+                            "description": "The main message text with Slack formatting",
+                        },
                         "replies": {
                             "type": "array",
-                            "description": "Array of reply messages",
+                            "description": "Array of reply messages (can be empty, single emoji, or detailed)",
+                            "items": {"type": "string"},
+                        },
+                        "reactions": {
+                            "type": "array",
+                            "description": "Emoji reactions to add to the main message (without colons, e.g., 'rocket', 'eyes')",
                             "items": {"type": "string"},
                         },
                     },
-                    "required": ["text", "replies"],
+                    "required": ["text", "replies", "reactions"],
                     "additionalProperties": False,
                 },
             }
@@ -1417,7 +1483,6 @@ def main() -> None:
         logging.getLogger("httpx").setLevel(logging.DEBUG)
 
     app_config, env = load_config(args.users)
-    env_user_name = env.get("SLACK_USER_NAME", "default")
 
     # Try AI generation if requested
     messages: list[dict[str, Any]] | None = None
@@ -1477,9 +1542,7 @@ def main() -> None:
             # If --user is specified, use that; else if message has user field, use that;
             # else pass None to let select_user use round-robin/random strategy
             user_name = (
-                forced_user
-                if forced_user
-                else (str(message_user) if message_user else None)
+                forced_user if forced_user else (str(message_user) if message_user else None)
             )
 
             posting_user = app_config.select_user(name=user_name, message_index=i - 1)
@@ -1496,21 +1559,41 @@ def main() -> None:
                     success += 1
                     thread_ts = result["ts"]
 
-                    # Add reaction if emoji found in message
-                    emoji_match = re.search(r":([a-z_0-9]+):", text)
-                    if emoji_match:
+                    # Add AI-generated reactions first (if present)
+                    ai_reactions = msg_data.get("reactions", [])
+                    for reaction_emoji in ai_reactions:
                         try:
                             time.sleep(args.reaction_delay)
-                            add_reaction(
-                                request_config["SLACK_CHANNEL_ID"],
-                                thread_ts,
-                                emoji_match.group(1),
-                                request_config,
-                            )
+                            # Strip colons if present
+                            emoji_name = reaction_emoji.strip(":")
+                            if emoji_name:
+                                add_reaction(
+                                    request_config["SLACK_CHANNEL_ID"],
+                                    thread_ts,
+                                    emoji_name,
+                                    request_config,
+                                )
                         except (SlackNetworkError, RetryError) as e:
                             logger.warning(f"Failed to add reaction after retries: {e}")
                         except SlackRateLimitError as e:
                             logger.warning(f"Rate limited adding reaction: {e}")
+
+                    # Also add reaction if emoji found in message text (fallback for non-AI)
+                    if not ai_reactions:
+                        emoji_match = re.search(r":([a-z_0-9]+):", text)
+                        if emoji_match:
+                            try:
+                                time.sleep(args.reaction_delay)
+                                add_reaction(
+                                    request_config["SLACK_CHANNEL_ID"],
+                                    thread_ts,
+                                    emoji_match.group(1),
+                                    request_config,
+                                )
+                            except (SlackNetworkError, RetryError) as e:
+                                logger.warning(f"Failed to add reaction after retries: {e}")
+                            except SlackRateLimitError as e:
+                                logger.warning(f"Rate limited adding reaction: {e}")
 
                     # Post replies
                     replies = msg_data.get("replies", [])
