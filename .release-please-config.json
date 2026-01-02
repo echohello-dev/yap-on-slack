@@ -2,8 +2,7 @@
     "release-type": "python",
     "packages": {
         ".": {
-            "package-name": "yap-on-slack",
-            "initial-version": "1.0.0"
+            "package-name": "yap-on-slack"
         }
     }
 }
