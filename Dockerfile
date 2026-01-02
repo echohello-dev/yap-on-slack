@@ -2,8 +2,8 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Copy dependency file first for better caching
-COPY pyproject.toml .
+# Copy dependency files first for better caching
+COPY pyproject.toml README.md ./
 
 # Install uv and dependencies
 RUN apt-get update && apt-get install -y \
