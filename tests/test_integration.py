@@ -120,7 +120,7 @@ class TestLoadMessages:
             messages = load_messages()
 
             # Should return default messages
-            assert len(messages) == 5
+            assert len(messages) == 22
             assert isinstance(messages, list)
             assert all("text" in msg for msg in messages)
 
@@ -140,7 +140,7 @@ class TestLoadMessages:
                 messages = load_messages()
 
                 # Should fallback to default messages
-                assert len(messages) == 5
+                assert len(messages) == 22
 
     def test_load_messages_default_format(self):
         """Test that default messages have correct format."""

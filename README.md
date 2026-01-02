@@ -9,6 +9,8 @@ Post realistic support conversations to Slack with proper formatting, threading,
 - 📝 **Rich text formatting** - Bold, italic, code, links, and emoji support
 - 🧵 **Threaded conversations** - Replies automatically grouped in threads
 - 👍 **Smart reactions** - Auto-add reactions based on message content
+- 🤖 **AI message generation** - Use Gemini 3 Flash to create realistic conversations
+- 🐙 **GitHub context** - Generate messages from real commits, PRs, and issues
 - 🎨 **Beautiful terminal UI** - Progress tracking with rich output
 - 🐳 **Docker ready** - Easy deployment with container support
 - ⚙️ **Flexible configuration** - CLI arguments and JSON message definitions
@@ -67,6 +69,9 @@ mise run run
 # Use custom messages file
 mise run run -- --messages custom.json
 
+# Generate messages with AI (requires OPENROUTER_API_KEY)
+mise run run -- --use-ai
+
 # Dry run (validate without posting)
 mise run run -- --dry-run
 
@@ -80,6 +85,7 @@ mise run run -- --verbose
 ### CLI Options
 
 - `--messages PATH` - Custom messages JSON file
+- `--use-ai` - Generate messages using OpenRouter Gemini 3 Flash
 - `--dry-run` - Validate without posting to Slack
 - `--limit N` - Post only first N messages
 - `--delay SECONDS` - Delay between messages (default: 2.0)
@@ -88,6 +94,31 @@ mise run run -- --verbose
 - `--verbose` - Enable debug logging
 
 Run `mise run run -- --help` for full options.
+
+## AI Message Generation
+
+Generate realistic conversations using OpenRouter's Gemini 3 Flash model with optional GitHub context:
+
+1. **Get an OpenRouter API key**: https://openrouter.ai
+2. **Add to `.env`**:
+   ```bash
+   OPENROUTER_API_KEY=sk-or-v1-your-key-here
+   ```
+3. **Optional: Add GitHub token for context**:
+   ```bash
+   GITHUB_TOKEN=ghp_your-token-here
+   # Or use: gh auth token (if GitHub CLI installed)
+   ```
+4. **Run with AI**:
+   ```bash
+   mise run run -- --use-ai
+   ```
+
+When `--use-ai` is used:
+- Fetches recent commits, PRs, and issues from your GitHub repositories
+- Generates 20 realistic engineering team conversations
+- Messages reference actual project context (repos, issues, PRs)
+- Falls back to default messages if AI generation fails
 
 ## Custom Messages
 

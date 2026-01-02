@@ -87,7 +87,7 @@ class TestMessageValidation:
 
         # With pydantic, invalid JSON returns default messages instead of raising
         messages = load_messages(messages_file)
-        assert len(messages) == 5  # Default messages
+        assert len(messages) == 22  # Default messages
 
     def test_load_messages_not_array(self, tmp_path):
         """Test error when messages.json is not an array."""
@@ -96,7 +96,7 @@ class TestMessageValidation:
 
         # With pydantic validation, TypeError causes fallback to default messages
         messages = load_messages(messages_file)
-        assert len(messages) == 5  # Default messages
+        assert len(messages) == 22  # Default messages
         assert all("text" in msg for msg in messages)
 
     def test_load_messages_missing_text_field(self, tmp_path):
@@ -106,7 +106,7 @@ class TestMessageValidation:
 
         # With pydantic, invalid messages return default messages
         messages = load_messages(messages_file)
-        assert len(messages) == 5  # Default messages
+        assert len(messages) == 22  # Default messages
 
     def test_load_messages_invalid_text_type(self, tmp_path):
         """Test error when text field is not a string."""
@@ -115,7 +115,7 @@ class TestMessageValidation:
 
         # With pydantic, invalid messages return default messages
         messages = load_messages(messages_file)
-        assert len(messages) == 5  # Default messages
+        assert len(messages) == 22  # Default messages
 
     def test_load_messages_invalid_replies_type(self, tmp_path):
         """Test error when replies is not an array."""
@@ -124,7 +124,7 @@ class TestMessageValidation:
 
         # With pydantic, invalid messages return default messages
         messages = load_messages(messages_file)
-        assert len(messages) == 5  # Default messages
+        assert len(messages) == 22  # Default messages
 
     def test_load_messages_success(self, tmp_path):
         """Test successful message loading."""
@@ -139,7 +139,7 @@ class TestMessageValidation:
     def test_load_messages_default_fallback(self):
         """Test loading default messages when file doesn't exist."""
         messages = load_messages(Path("/nonexistent/messages.json"))
-        assert len(messages) == 5  # Default message count
+        assert len(messages) == 22  # Default message count
         assert all("text" in msg for msg in messages)
 
 
