@@ -1,78 +1,97 @@
 # yap-on-slack
 
-🗣️🗣️🗣️ Simulate realistic messages in Slack channels for testing purposes
+🗣️ Simulate realistic Slack conversations for testing and demos
 
 Post realistic support conversations to Slack with proper formatting, threading, and reactions. Perfect for testing chat interfaces, training support teams, or populating demo workspaces.
 
 ## Features
 
-- 📝 Rich text formatting (bold, italic, code, links, emoji)
-- 🧵 Threaded conversations with replies
-- 👍 Automatic reactions based on message content
-- 🎨 Beautiful terminal UI with progress tracking
-- 🐳 Docker support for easy deployment
-- ⚙️ Customizable messages via JSON
+- 📝 **Rich text formatting** - Bold, italic, code, links, and emoji support
+- 🧵 **Threaded conversations** - Replies automatically grouped in threads
+- 👍 **Smart reactions** - Auto-add reactions based on message content
+- 🎨 **Beautiful terminal UI** - Progress tracking with rich output
+- 🐳 **Docker ready** - Easy deployment with container support
+- ⚙️ **Flexible configuration** - CLI arguments and JSON message definitions
+- ✅ **Message validation** - Schema validation with Pydantic
+- 🔒 **Multiple auth methods** - Session tokens, User OAuth, or Bot tokens
 
 ## Quick Start
 
 ### Prerequisites
 
 - Python 3.13+ or Docker
-- [mise](https://mise.jdx.dev/) (recommended) or uv
-- Slack session tokens (xoxc and xoxd)
+- [mise](https://mise.jdx.dev/) (recommended) or [uv](https://docs.astral.sh/uv/)
+- Slack workspace credentials (see [Authentication](#authentication))
 
-### Getting Slack Tokens
+### Authentication
 
-1. Open Slack in your browser
-2. Open Developer Tools (F12)
-3. Go to Network tab
-4. Send a message in any channel
-5. Find a request to `api/` endpoints
-6. Look in Cookies for:
-   - `d` cookie → `SLACK_XOXD_TOKEN`
-   - `token` in form data → `SLACK_XOXC_TOKEN`
+You'll need Slack credentials to post messages. We support multiple authentication methods:
+
+- **Session Tokens** (xoxc/xoxd) - Quick setup, browser-based (expires frequently)
+- **User OAuth Token** (xoxp) - Recommended for production use
+- **Bot Token** (xoxb) - For bot-based workflows
+
+📖 **See [docs/usage.md](docs/usage.md#authentication-setup)** for detailed setup instructions for each method.
+
+⚠️ **Security**: Read [SECURITY.md](SECURITY.md) for important security considerations, especially for session tokens.
 
 ### Installation
 
 ```bash
-# Clone the repo
+# Clone the repository
 git clone https://github.com/echohello-dev/yap-on-slack.git
 cd yap-on-slack
 
 # Copy environment template
 cp .env.example .env
 
-# Edit .env with your tokens
-# SLACK_XOXC_TOKEN=xoxc-...
-# SLACK_XOXD_TOKEN=xoxd-...
-# SLACK_ORG_URL=https://your-workspace.slack.com
-# SLACK_CHANNEL_ID=C1234567890
-# SLACK_TEAM_ID=T1234567890
+# Edit .env with your credentials
+# See docs/usage.md for how to obtain each value
+nano .env
 
 # Install dependencies
 mise run install
 
-# Run it!
+# Run with default messages
 mise run run
 ```
 
-### Using Docker
+## Usage
+
+### Basic Commands
 
 ```bash
-# Build image
-docker build -t yap-on-slack .
+# Post default messages
+mise run run
 
-# Run with your .env file
-docker run --rm --env-file .env yap-on-slack
+# Use custom messages file
+mise run run -- --messages custom.json
 
-# Or pull from GHCR
-docker pull ghcr.io/echohello-dev/yap-on-slack:latest
-docker run --rm --env-file .env ghcr.io/echohello-dev/yap-on-slack:latest
+# Dry run (validate without posting)
+mise run run -- --dry-run
+
+# Limit messages and add delays
+mise run run -- --limit 5 --delay 3
+
+# Verbose output for debugging
+mise run run -- --verbose
 ```
+
+### CLI Options
+
+- `--messages PATH` - Custom messages JSON file
+- `--dry-run` - Validate without posting to Slack
+- `--limit N` - Post only first N messages
+- `--delay SECONDS` - Delay between messages (default: 2.0)
+- `--reply-delay SECONDS` - Delay between replies (default: 1.0)
+- `--reaction-delay SECONDS` - Delay before reactions (default: 0.5)
+- `--verbose` - Enable debug logging
+
+Run `mise run run -- --help` for full options.
 
 ## Custom Messages
 
-Create a `messages.json` file to define your own conversations:
+Create `messages.json` with your conversation threads:
 
 ```json
 [
@@ -82,67 +101,76 @@ Create a `messages.json` file to define your own conversations:
       "Nice! Performance looks good",
       "All tests passing :white_check_mark:"
     ]
+  },
+  {
+    "text": "Quick question - what's our policy on log retention?"
   }
 ]
 ```
 
-See [messages.json.example](messages.json.example) for more examples.
+**Supported formatting:** bold, italic, strikethrough, code, links, emoji, and bullet points.
 
-### Formatting Support
+📖 See [docs/usage.md](docs/usage.md#custom-messages) for complete formatting syntax and examples.
 
-- `*bold*` or `**bold**` - Bold text
-- `_italic_` - Italic text
-- `~strikethrough~` - Strikethrough
-- `` `code` `` - Inline code
-- `<https://example.com|label>` - Links with labels
-- `:emoji_name:` - Emoji (e.g., :rocket:, :warning:)
-- `•` or `- ` - Bullet points
+## Docker
+
+```bash
+# Build and run locally
+docker build -t yap-on-slack .
+docker run --rm --env-file .env yap-on-slack
+
+# Or use pre-built image from GitHub Container Registry
+docker pull ghcr.io/echohello-dev/yap-on-slack:latest
+docker run --rm --env-file .env ghcr.io/echohello-dev/yap-on-slack:latest
+```
 
 ## Development
 
+### Setup
+
 ```bash
-# Install dependencies
+# Install dependencies (including dev tools)
 mise run install
 
-# Lint code
-mise run lint
-
-# Format code
-mise run format
-
-# Run tests
-mise run test
+# Install pre-commit hooks
+uv run pre-commit install
 ```
 
-## Available Commands
-
-See all available commands with mise:
+### Available Commands
 
 ```bash
-mise tasks
+mise run lint       # Run ruff linter
+mise run format     # Format code with ruff
+mise run typecheck  # Run mypy type checking
+mise run test       # Run pytest
+mise run check      # Run all checks (lint + typecheck + test)
 ```
 
-Key commands:
-- `mise run install` - Install dependencies
-- `mise run run` - Post messages to Slack
-- `mise run lint` - Run linter
-- `mise run format` - Format code
-- `mise run test` - Run tests
-- `mise run build` - Build Docker image
+See all available tasks: `mise tasks`
+
+### Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Development setup
+- Code style guidelines
+- Testing procedures
+- Pull request process
+
+## Documentation
+
+- **[docs/usage.md](docs/usage.md)** - Comprehensive usage guide, authentication setup, and troubleshooting
+- **[SECURITY.md](SECURITY.md)** - Security best practices and token management
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Development guidelines and workflow
+- **[docs/adrs/](docs/adrs/)** - Architecture decision records
 
 ## CI/CD
 
-This repo includes:
-- **Build workflow** - Lints, tests, and publishes Docker images to GHCR
-- **Release Please** - Automated semantic versioning and changelogs
+- **Build Workflow** - Automated linting, type checking, testing, and Docker image publishing
+- **Release Please** - Semantic versioning and automated changelog generation
 
-Images are published to: `ghcr.io/echohello-dev/yap-on-slack`
+Docker images: `ghcr.io/echohello-dev/yap-on-slack`
 
 ## License
 
-MIT
-
-## Contributing
-
-PRs welcome! Please run `mise run lint` and `mise run format` before submitting.
+MIT - See [LICENSE](LICENSE) for details
 

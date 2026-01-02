@@ -102,7 +102,9 @@ class TestLoadMessages:
 
             with patch("yap_on_slack.post_messages.Path") as mock_path:
                 mock_path.return_value.exists.return_value = True
-                mock_path.return_value.open.return_value.__enter__.return_value = messages_file.open()
+                mock_path.return_value.open.return_value.__enter__.return_value = (
+                    messages_file.open()
+                )
 
                 messages = load_messages()
 
@@ -131,7 +133,9 @@ class TestLoadMessages:
 
             with patch("yap_on_slack.post_messages.Path") as mock_path:
                 mock_path.return_value.exists.return_value = True
-                mock_path.return_value.open.return_value.__enter__.return_value = messages_file.open()
+                mock_path.return_value.open.return_value.__enter__.return_value = (
+                    messages_file.open()
+                )
 
                 messages = load_messages()
 
@@ -160,7 +164,9 @@ class TestLoadMessages:
 
             with patch("yap_on_slack.post_messages.Path") as mock_path:
                 mock_path.return_value.exists.return_value = True
-                mock_path.return_value.open.return_value.__enter__.return_value = messages_file.open()
+                mock_path.return_value.open.return_value.__enter__.return_value = (
+                    messages_file.open()
+                )
 
                 messages = load_messages()
 

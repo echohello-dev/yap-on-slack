@@ -29,6 +29,9 @@ jobs:
       - name: Run linter
         run: mise run lint
 
+      - name: Run type checking
+        run: mise run typecheck
+
       - name: Run tests
         run: mise run test
 

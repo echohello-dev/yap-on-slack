@@ -6,7 +6,7 @@ _.file = ".env"
 
 [tasks.install]
 description = "Install dependencies"
-run = "uv sync"
+run = "uv sync --all-extras"
 
 [tasks.lint]
 description = "Run linter"
@@ -19,6 +19,14 @@ run = "uv run ruff format ."
 [tasks.test]
 description = "Run tests"
 run = "uv run pytest"
+
+[tasks.typecheck]
+description = "Run type checking with mypy"
+run = "uv run mypy yap_on_slack"
+
+[tasks.check]
+description = "Run all checks (lint, typecheck, test)"
+run = ["mise run lint", "mise run typecheck", "mise run test"]
 
 [tasks.run]
 description = "Run the message poster"

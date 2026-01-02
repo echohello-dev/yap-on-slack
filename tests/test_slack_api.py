@@ -68,6 +68,8 @@ class TestPostMessage:
     @patch("yap_on_slack.post_messages.httpx.post")
     def test_post_message_failure(self, mock_post, config):
         """Test message posting failure."""
+        from yap_on_slack.post_messages import SlackAPIError
+
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "ok": False,
@@ -75,27 +77,36 @@ class TestPostMessage:
         }
         mock_post.return_value = mock_response
 
-        result = post_message("Test message", config)
+        with pytest.raises(SlackAPIError):
+            post_message("Test message", config)
 
-        assert result is None
-
+    @patch("time.sleep")
     @patch("yap_on_slack.post_messages.httpx.post")
-    def test_post_message_network_error(self, mock_post, config):
+    def test_post_message_network_error(self, mock_post, mock_sleep, config):
         """Test network error during message posting."""
+        from yap_on_slack.post_messages import SlackNetworkError
+
         mock_post.side_effect = httpx.ConnectError("Connection failed")
 
-        result = post_message("Test message", config)
+        with pytest.raises(SlackNetworkError):
+            post_message("Test message", config)
 
-        assert result is None
+        # Verify it retried 3 times
+        assert mock_post.call_count == 3
 
+    @patch("time.sleep")
     @patch("yap_on_slack.post_messages.httpx.post")
-    def test_post_message_timeout(self, mock_post, config):
+    def test_post_message_timeout(self, mock_post, mock_sleep, config):
         """Test timeout during message posting."""
+        from yap_on_slack.post_messages import SlackNetworkError
+
         mock_post.side_effect = httpx.TimeoutException("Request timed out")
 
-        result = post_message("Test message", config)
+        with pytest.raises(SlackNetworkError):
+            post_message("Test message", config)
 
-        assert result is None
+        # Verify it retried 3 times
+        assert mock_post.call_count == 3
 
     @patch("yap_on_slack.post_messages.httpx.post")
     def test_post_message_with_formatting(self, mock_post, config):
@@ -167,7 +178,7 @@ class TestAddReaction:
 
     @patch("yap_on_slack.post_messages.httpx.post")
     def test_add_reaction_failure(self, mock_post, config):
-        """Test reaction adding failure."""
+        """Test reaction adding failure - already_reacted returns True."""
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "ok": False,
@@ -177,25 +188,35 @@ class TestAddReaction:
 
         result = add_reaction("C1234567890", "1234567890.123456", "thumbsup", config)
 
-        assert result is False
+        assert result is True  # already_reacted is treated as success
 
+    @patch("time.sleep")
     @patch("yap_on_slack.post_messages.httpx.post")
-    def test_add_reaction_network_error(self, mock_post, config):
+    def test_add_reaction_network_error(self, mock_post, mock_sleep, config):
         """Test network error during reaction adding."""
+        from yap_on_slack.post_messages import SlackNetworkError
+
         mock_post.side_effect = httpx.ConnectError("Connection failed")
 
-        result = add_reaction("C1234567890", "1234567890.123456", "thumbsup", config)
+        with pytest.raises(SlackNetworkError):
+            add_reaction("C1234567890", "1234567890.123456", "thumbsup", config)
 
-        assert result is False
+        # Verify it retried 3 times
+        assert mock_post.call_count == 3
 
+    @patch("time.sleep")
     @patch("yap_on_slack.post_messages.httpx.post")
-    def test_add_reaction_timeout(self, mock_post, config):
+    def test_add_reaction_timeout(self, mock_post, mock_sleep, config):
         """Test timeout during reaction adding."""
+        from yap_on_slack.post_messages import SlackNetworkError
+
         mock_post.side_effect = httpx.TimeoutException("Request timed out")
 
-        result = add_reaction("C1234567890", "1234567890.123456", "thumbsup", config)
+        with pytest.raises(SlackNetworkError):
+            add_reaction("C1234567890", "1234567890.123456", "thumbsup", config)
 
-        assert result is False
+        # Verify it retried 3 times
+        assert mock_post.call_count == 3
 
     @patch("yap_on_slack.post_messages.httpx.post")
     def test_add_reaction_with_emoji_variants(self, mock_post, config):
