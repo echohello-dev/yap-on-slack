@@ -663,7 +663,7 @@ Example: "*Issue*: _Database timeout_ on <https://github.com|PR#123>. `SELECT` q
 
             try:
                 data = json.loads(content)
-                messages = data.get("messages", [])
+                messages: list[dict[str, Any]] = data.get("messages", [])
                 logger.info(f"✓ Generated {len(messages)} messages from Gemini 3 Flash")
                 return messages
             except json.JSONDecodeError as e:
