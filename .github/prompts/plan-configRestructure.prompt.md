@@ -75,23 +75,31 @@ ai:
    - `Config` — top-level model combining all sections
 
 5. **Implement config discovery** in post_messages.py:
-   - Search order: `--config` flag → `./config.yaml` → `~/.config/yap-on-slack/config.yaml`
-   - Optionally load `.env` from same directory as config file (if present)
-   - Env vars override config file values (SLACK_XOXC_TOKEN, SLACK_XOXD_TOKEN, etc.)
+   - Search order: `--config` flag → `./config.yaml` (CWD) → `~/.config/yap-on-slack/config.yaml` (home)
+   - Both locations work equally; CWD takes precedence when both exist
+   - Optionally load `.env` from same directory as discovered config file (if present)
+   - Load env vars in order: .env file → environment → config file
+   - Validate all required credentials exist before starting (show helpful error if missing)
+   - Support both forms: single default user (SLACK_XOXC_TOKEN/SLACK_XOXD_TOKEN env vars or config root credentials) OR multi-user (users array in config)
 
 6. **Refactor `init` command** in cli.py:
-   - Default: write to `~/.config/yap-on-slack/config.yaml`
-   - Add `--local` flag to write to `./config.yaml` instead
+   - Default behavior: write to `~/.config/yap-on-slack/config.yaml`
+   - Add `--local` flag to write to `./config.yaml` (CWD) instead
    - Create parent directories if needed
+   - Both locations work seamlessly; users can use either location depending on preference
 
 7. **Extract hardcoded AI config** from post_messages.py:
    - Move model name, temperature, max_tokens into config defaults
    - Extract system prompt (~3KB) into config with sensible default
 
 8. **Update `run` command** in cli.py:
-   - Load unified config using new discovery logic
-   - Validate credentials exist (from config or env)
-   - Add `--config` flag to specify config file path
+   - Load unified config using new discovery logic (CWD or home dir)
+   - Load and validate `.env` if present in config directory
+   - Merge env vars into config (env vars override config file values)
+   - Validate all required credentials exist before posting (workspace + tokens)
+   - Show clear error messages if validation fails (missing tokens, invalid URLs, etc.)
+   - Add `--config` flag to specify explicit config file path
+   - Support both single-user (env vars + default credentials) and multi-user (users array) workflows
 
 9. **Remove deprecated files** from init command:
    - Stop generating `users.yaml`, `messages.json`, `.env`
@@ -102,6 +110,11 @@ ai:
 ## Credential Precedence (highest to lowest)
 
 1. CLI flags (if any added in future)
-2. Environment variables (SLACK_XOXC_TOKEN, SLACK_XOXD_TOKEN)
-3. Config file `credentials:` section (default user)
-4. Config file `users:` array (per-user credentials)
+2. Environment variables (SLACK_XOXC_TOKEN, SLACK_XOXD_TOKEN, OPENROUTER_API_KEY, etc.)
+3. Config file `credentials:` section (default user credentials)
+4. Config file `users:` array per-user credentials
+5. dotenv `.env` file in config directory
+
+**Default user behavior**: If only one user (no users array), use root-level credentials from env or config.
+
+**Multi-user behavior**: If users array defined, merge with default credentials from root credentials or env vars.
