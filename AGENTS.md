@@ -4,188 +4,91 @@
 
 Simulate realistic Slack messages in channels for testing purposes. Python CLI tool that posts messages with formatting, replies, and reactions.
 
-## Architecture
+## Key Files & Architecture
 
-Python CLI tool with:
-- **yap_on_slack/cli.py** — CLI entry point (`yos`, `yaponslack`, `yap-on-slack`)
+- **yap_on_slack/cli.py** — CLI entry point
 - **yap_on_slack/post_messages.py** — Core message posting logic
-- **yap_on_slack/prompts/** — System prompt templates for AI (generate_messages.txt, generate_channel_prompts.txt)
-- **config.yaml** — Unified configuration file (workspace, credentials, users, messages, AI settings)
-- **schema/config.schema.json** — JSON Schema for config validation
-- **config.yaml.example** — Configuration template
+- **yap_on_slack/prompts/** — AI system prompt templates
+- **config.yaml** — Unified configuration file
+- **schema/config.schema.json** — JSON Schema for validation
+- **Tech stack**: Python 3.13, httpx, pydantic, rich
 
-## Installation
+## Quick Reference
 
-```bash
-# Via pipx (recommended)
-pipx install yap-on-slack
+**For detailed information, refer to:**
+- **[docs/usage.md](docs/usage.md)** — Complete usage guide, authentication setup, troubleshooting
+- **[README.md](README.md)** — Installation, features, quick start
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — Development guidelines
+- **[docs/adrs/](docs/adrs/)** — Architecture decisions
 
-# Via pip
-pip install yap-on-slack
-
-# From GitHub URL
-pipx install git+https://github.com/echohello-dev/yap-on-slack.git
-
-# From source
-mise run install
-```
-
-## Commands
-
-**CLI commands** (after installation):
+## Essential Commands
 
 ```bash
-yos init            # Create config.yaml in ~/.config/yap-on-slack/ (default)
-yos init --local    # Create .yos.yaml in current directory
-yos run             # Post messages to Slack
-yos run -i          # Interactive channel selector
-yos run --dry-run   # Validate without posting
-yos run --use-ai    # Generate AI messages with openrouter/auto model
-yos run --use-ai --model google/gemini-2.5-flash  # Use specific model
-yos scan -i         # Scan channel interactively and generate system prompts
-yos scan --channel-id C123  # Scan specific channel
-yos scan --channel-id C123 --model grok-2  # Scan with specific LLM
-yos --version       # Show version
+# Installation
+pipx install yap-on-slack                  # Install globally
+mise run install                           # Install from source
+
+# Configuration
+yos init                                   # Create config in ~/.config/yap-on-slack/
+yos init --local                           # Create .yos.yaml in current directory
+
+# Running
+yos run                                    # Post messages
+yos run -i                                 # Interactive channel selector
+yos run --dry-run                          # Validate without posting
+yos run --use-ai                           # Generate AI messages
+yos scan -i                                # Scan channel and generate prompts
+
+# Development (use mise run)
+mise run lint                              # Run ruff linter
+mise run format                            # Format code
+mise run test                              # Run pytest
 ```
 
-**Development commands** (use `mise run`):
+## Configuration Essentials
 
-```bash
-mise run install    # Install dependencies with uv
-mise run lint       # Run ruff linter
-mise run format     # Format code with ruff
-mise run test       # Run pytest
-mise run run        # Execute message posting
-mise run build      # Build Docker image
-```
+**Config file locations** (priority order):
+1. `--config` flag → 2. `.yos.yaml` → 3. `config.yaml` → 4. `~/.config/yap-on-slack/config.yaml`
 
-## Configuration
-
-**Primary configuration file**: `config.yaml` or `.yos.yaml`
-
-Config file discovery order:
-1. `--config` flag (explicit path)
-2. `./.yos.yaml` (current directory - highest priority)
-3. `./config.yaml` (current directory)
-4. `~/.config/yap-on-slack/config.yaml` (XDG home directory)
-
-**Config file structure**:
-
+**Minimal config structure** (see config.yaml.example for full details):
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/echohello-dev/yap-on-slack/main/schema/config.schema.json
-
-# Workspace settings (required)
 workspace:
-  org_url: https://your-workspace.slack.com
+  org_url: https://workspace.slack.com
   channel_id: C0123456789
   team_id: T0123456789
 
-# Default credentials (required if no users array)
 credentials:
-  xoxc_token: xoxc-your-token-here
-  xoxd_token: xoxd-your-token-here
-  cookies: ""  # optional
+  xoxc_token: xoxc-token-here
+  xoxd_token: xoxd-token-here
 
-# User selection strategy
-user_strategy: round_robin  # round_robin | random
-
-# Additional users (optional)
-users:
-  - name: alice
-    xoxc_token: xoxc-alice-token
-    xoxd_token: xoxd-alice-token
-  - name: bob
-    xoxc_token: xoxc-bob-token
-    xoxd_token: xoxd-bob-token
-
-# Messages to post (optional, can also use --use-ai)
-messages:
-  - text: "Good morning team! :wave:"
-    user: alice  # optional
-    replies:
-      - "Hey! Ready for standup?"
-      - text: "Morning everyone"
-        user: bob
-    reactions:
-      - wave
-      - coffee
-
-# AI message generation
-ai:
-  enabled: false
-  model: openrouter/auto  # Auto-selects best model (recommended)
-  # See top weekly models: https://openrouter.ai/models?order=top-weekly
-  api_key: ""  # or use OPENROUTER_API_KEY env var
-  temperature: 0.7
-  max_tokens: 4000
-  # system_prompt: |  # Optional: custom prompt (overrides default)
-  #   Generate realistic Slack messages...
-  # Default: yap_on_slack/prompts/generate_messages.txt
-
-# Channel scanning settings (for `yos scan` command)
-scan:
-  limit: 200                                # Max messages to fetch (10-5000)
-  throttle: 0.5                             # Delay between API batches in seconds
-  output_dir: ~/.config/yap-on-slack/scan   # Where to save prompts and exports
-  model: openrouter/auto                    # Model for prompt generation
-  export_data: true                         # Export messages to text file
-  # Default system prompt: yap_on_slack/prompts/generate_channel_prompts.txt
+# Optional: multiple users, AI settings, messages
+# See config.yaml.example for full structure
 ```
 
-**Environment variables** (override config file):
-- `SLACK_XOXC_TOKEN` — Session token (overrides credentials.xoxc_token)
-- `SLACK_XOXD_TOKEN` — Session token (overrides credentials.xoxd_token)
-- `SLACK_ORG_URL` — Workspace URL (overrides workspace.org_url)
-- `SLACK_CHANNEL_ID` — Channel ID (overrides workspace.channel_id)
-- `SLACK_TEAM_ID` — Team ID (overrides workspace.team_id)
-- `OPENROUTER_API_KEY` — AI API key (overrides ai.api_key)
-- `GITHUB_TOKEN` — GitHub token for context (optional)
+**Environment variables override config:**
+- `SLACK_XOXC_TOKEN`, `SLACK_XOXD_TOKEN`
+- `SLACK_ORG_URL`, `SLACK_CHANNEL_ID`, `SLACK_TEAM_ID`
+- `OPENROUTER_API_KEY`, `GITHUB_TOKEN`
 
-**Legacy support**: `.env` files in the config directory are still loaded and merged with config.yaml. Environment variables take precedence.
+## When Working on This Project
 
-## Message Format
+1. **Read relevant docs first**: Check docs/usage.md for detailed behavior
+2. **Check ADRs**: Review docs/adrs/ for architectural decisions
+3. **Use mise**: Prefer `mise run <task>` for common operations
+4. **Follow CONTRIBUTING.md**: Development guidelines and workflow
+5. **Test changes**: Use `mise run test` and `yos run --dry-run`
 
-Messages support markdown-like formatting:
-- `*bold*` or `**bold**` — Bold text
-- `_italic_` — Italic text
-- `~strikethrough~` — Strikethrough
-- `` `code` `` — Inline code
-- `<url|label>` — Links with labels
-- `:emoji_name:` — Emoji (e.g., :rocket:, :warning:)
-- `•` or `- ` — Bullet points
+### When Adding New Features
 
-Messages can be defined in:
-1. **config.yaml** `messages:` array
-2. **Custom JSON file** via `--messages` flag
-3. **AI generation** via `--use-ai` flag
-4. **Default fallback messages** (built-in)
+1. **Implement the feature** with proper type hints and error handling
+2. **Run linter**: `mise run lint` (fix any issues)
+3. **Run tests**: `mise run test` (ensure all tests pass)
+4. **Update documentation**:
+   - Update [README.md](README.md) if user-facing feature
+   - Update [docs/usage.md](docs/usage.md) for detailed usage/troubleshooting
+   - Update [config.yaml.example](config.yaml.example) for new config options
+   - Consider adding ADR to [docs/adrs/](docs/adrs/) for significant decisions
+5. **Test end-to-end**: `yos run --dry-run` to validate integration
 
-## Tech Stack
+**Note**: This tool uses Slack session tokens (xoxc/xoxd) extracted from browser dev tools, not bot tokens. See [docs/usage.md](docs/usage.md#authentication-setup) for extraction details.
 
-- **Python 3.13** — Latest Python version
-- **httpx** — Async HTTP client for Slack API
-- **pydantic** — Configuration validation
-- **rich** — Terminal UI with progress bars
-- **python-dotenv** — Environment configuration
-- **pyaml** — YAML configuration parsing
-- **ruff** — Fast linting and formatting
-
-## Docker
-
-Build and run in container:
-```bash
-docker build -t yap-on-slack .
-docker run --rm -v ~/.config/yap-on-slack:/config -e CONFIG_PATH=/config/config.yaml yap-on-slack
-```
-
-Published to GHCR: `ghcr.io/echohello-dev/yap-on-slack:latest`
-
-## Development
-
-1. Run `yos init` to create config.yaml (or `yos init --local` for CWD)
-2. Edit config file and add workspace settings + credentials
-3. Run `mise run install` to install dependencies (from source)
-4. Run `yos run` or `mise run run` to post messages
-5. Use `mise run lint` before committing
-
-**Note**: This uses Slack session tokens (xoxc/xoxd), not bot tokens. Extract from browser dev tools.
