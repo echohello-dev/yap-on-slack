@@ -1,6 +1,6 @@
 [project]
 name = "yap-on-slack"
-version = "0.0.1"
+version = "1.0.0"
 description = "Simulate realistic messages in Slack channels for testing purposes"
 readme = "README.md"
 requires-python = ">=3.13"
