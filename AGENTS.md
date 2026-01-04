@@ -35,7 +35,7 @@ mise run install
 
 ```bash
 yos init            # Create config.yaml in ~/.config/yap-on-slack/ (default)
-yos init --local    # Create config.yaml in current directory
+yos init --local    # Create .yos.yaml in current directory
 yos run             # Post messages to Slack
 yos run -i          # Interactive channel selector
 yos run --dry-run   # Validate without posting
@@ -58,12 +58,13 @@ mise run build      # Build Docker image
 
 ## Configuration
 
-**Primary configuration file**: `config.yaml`
+**Primary configuration file**: `config.yaml` or `.yos.yaml`
 
 Config file discovery order:
 1. `--config` flag (explicit path)
-2. `./config.yaml` (current directory)
-3. `~/.config/yap-on-slack/config.yaml` (XDG home directory)
+2. `./.yos.yaml` (current directory - highest priority)
+3. `./config.yaml` (current directory)
+4. `~/.config/yap-on-slack/config.yaml` (XDG home directory)
 
 **Config file structure**:
 

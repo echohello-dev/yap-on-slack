@@ -6,16 +6,11 @@ from unittest.mock import patch
 
 import pytest
 
-from yap_on_slack.post_messages import (
-    AIConfigModel,
-    CredentialsConfigModel,
-    MessageConfigModel,
-    UnifiedConfig,
-    UserConfigModel,
-    WorkspaceConfigModel,
-    discover_config_file,
-    load_unified_config,
-)
+from yap_on_slack.post_messages import (AIConfigModel, CredentialsConfigModel,
+                                        MessageConfigModel, UnifiedConfig,
+                                        UserConfigModel, WorkspaceConfigModel,
+                                        discover_config_file,
+                                        load_unified_config)
 
 
 class TestWorkspaceConfigModel:
@@ -219,8 +214,19 @@ class TestDiscoverConfigFile:
         with pytest.raises(ValueError, match="Config file not found"):
             discover_config_file(Path("/nonexistent/config.yaml"))
 
-    def test_discover_cwd_config(self):
-        """Test discovery of config.yaml in CWD."""
+    def test_discover_cwd_yos_config(self):
+        """Test discovery of .yos.yaml in CWD (highest priority)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            yos_config_file = tmpdir_path / ".yos.yaml"
+            yos_config_file.write_text("workspace:\n  org_url: https://test.slack.com\n")
+
+            with patch("pathlib.Path.cwd", return_value=tmpdir_path):
+                discovered = discover_config_file()
+                assert discovered == yos_config_file
+
+    def test_discover_cwd_config_second_priority(self):
+        """Test discovery of config.yaml in CWD (second priority)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             config_file = tmpdir_path / "config.yaml"
@@ -231,26 +237,29 @@ class TestDiscoverConfigFile:
                 assert discovered == config_file
 
     def test_discover_home_config(self):
-        """Test discovery of config.yaml in home directory."""
+        """Test discovery of config.yaml in ~/.config/yap-on-slack/."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
-            config_file = tmpdir_path / "config.yaml"
+            home_config_dir = tmpdir_path / ".config" / "yap-on-slack"
+            home_config_dir.mkdir(parents=True)
+            config_file = home_config_dir / "config.yaml"
             config_file.write_text("workspace:\n  org_url: https://test.slack.com\n")
 
-            # Mock both CWD (no config) and user_config_dir (has config)
+            # Mock both CWD (no config) and Path.home() (has config)
             with patch("pathlib.Path.cwd", return_value=Path("/tmp")):
-                with patch(
-                    "yap_on_slack.post_messages.user_config_dir", return_value=str(tmpdir_path)
-                ):
+                with patch("pathlib.Path.home", return_value=tmpdir_path):
                     discovered = discover_config_file()
                     assert discovered == config_file
 
     def test_discover_no_config(self):
         """Test discovery when no config file exists."""
-        with patch("pathlib.Path.cwd", return_value=Path("/tmp")):
-            with patch("yap_on_slack.post_messages.user_config_dir", return_value="/nonexistent"):
-                discovered = discover_config_file()
-                assert discovered is None
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            with patch("pathlib.Path.cwd", return_value=tmpdir_path):
+                with patch("pathlib.Path.home", return_value=tmpdir_path):
+                    discovered = discover_config_file()
+                    assert discovered is None
 
 
 class TestLoadUnifiedConfig:

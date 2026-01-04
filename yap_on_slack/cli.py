@@ -6,15 +6,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from platformdirs import user_config_dir
 from rich.console import Console
-from rich.progress import (
-    BarColumn,
-    Progress,
-    SpinnerColumn,
-    TaskProgressColumn,
-    TextColumn,
-)
+from rich.progress import (BarColumn, Progress, SpinnerColumn,
+                           TaskProgressColumn, TextColumn)
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -25,12 +19,12 @@ console = Console()
 
 def cmd_init(args: argparse.Namespace) -> int:
     """Initialize configuration file for yap-on-slack."""
-    # Determine target directory
+    # Determine target directory and filename
     if args.local:
         config_dir = Path.cwd()
-        config_file = config_dir / "config.yaml"
+        config_file = config_dir / ".yos.yaml"
     else:
-        config_dir = Path(user_config_dir("yap-on-slack", ensure_exists=False))
+        config_dir = Path.home() / ".config" / "yap-on-slack"
         config_file = config_dir / "config.yaml"
 
     # Create directory if needed
@@ -109,12 +103,6 @@ ai:
     console.print()
 
     return 0
-    console.print("  2. (Optional) Edit [bold]users.yaml[/bold] for multi-user posting")
-    console.print("  3. (Optional) Edit [bold]messages.json[/bold] with custom messages")
-    console.print("  4. Run: [bold cyan]yos run[/bold cyan] (or yaponslack run)")
-    console.print()
-
-    return 0
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -126,13 +114,11 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Handle interactive channel selection
     if args.interactive or args.channel_id:
-        from yap_on_slack.post_messages import (
-            SlackAPIError,
-            SlackNetworkError,
-            SlackRateLimitError,
-            list_channels,
-            load_unified_config,
-        )
+        from yap_on_slack.post_messages import (SlackAPIError,
+                                                SlackNetworkError,
+                                                SlackRateLimitError,
+                                                list_channels,
+                                                load_unified_config)
 
         # Load config to get credentials
         try:
@@ -312,16 +298,12 @@ def cmd_version(args: argparse.Namespace) -> int:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     """Scan a Slack channel and generate system prompts."""
-    from yap_on_slack.post_messages import (
-        SlackAPIError,
-        SlackNetworkError,
-        SlackRateLimitError,
-        fetch_channel_messages,
-        generate_system_prompts,
-        get_channel_info,
-        list_channels,
-        load_unified_config,
-    )
+    from yap_on_slack.post_messages import (SlackAPIError, SlackNetworkError,
+                                            SlackRateLimitError,
+                                            fetch_channel_messages,
+                                            generate_system_prompts,
+                                            get_channel_info, list_channels,
+                                            load_unified_config)
 
     console.print("\n[bold blue]━━━ Yap on Slack: Channel Scanner ━━━[/bold blue]\n")
 
@@ -731,7 +713,7 @@ Commands can also be invoked as:
         "--local",
         "-l",
         action="store_true",
-        help="Create config.yaml in current directory (default: ~/.config/yap-on-slack/)",
+        help="Create .yos.yaml in current directory (default: ~/.config/yap-on-slack/config.yaml)",
     )
     init_parser.set_defaults(func=cmd_init)
 
@@ -744,7 +726,7 @@ Commands can also be invoked as:
     run_parser.add_argument(
         "--config",
         type=Path,
-        help="Path to config.yaml file (default: ./config.yaml or ~/.config/yap-on-slack/config.yaml)",
+        help="Path to config file (default: ./.yos.yaml, ./config.yaml, or ~/.config/yap-on-slack/config.yaml)",
     )
     run_parser.add_argument(
         "--channel-id",

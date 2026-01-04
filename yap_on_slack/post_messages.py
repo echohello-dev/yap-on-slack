@@ -18,19 +18,14 @@ from urllib.parse import unquote, urlparse
 import httpx
 import yaml
 from dotenv import dotenv_values
-from platformdirs import user_config_dir
 from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
+from rich.progress import (BarColumn, Progress, SpinnerColumn,
+                           TaskProgressColumn, TextColumn)
+from tenacity import (RetryError, retry, retry_if_exception_type,
+                      stop_after_attempt, wait_exponential)
 
 console = Console()
 
@@ -486,8 +481,9 @@ def discover_config_file(explicit_path: Path | None = None) -> Path | None:
 
     Search order:
     1. Explicit --config path
-    2. ./config.yaml (CWD)
-    3. ~/.config/yap-on-slack/config.yaml (XDG home)
+    2. ./.yos.yaml (CWD)
+    3. ./config.yaml (CWD)
+    4. ~/.config/yap-on-slack/config.yaml (XDG home)
 
     Args:
         explicit_path: Optional explicit config path from CLI
@@ -502,20 +498,26 @@ def discover_config_file(explicit_path: Path | None = None) -> Path | None:
         else:
             raise ValueError(f"Config file not found: {explicit_path}")
 
-    # Check CWD
+    # Check CWD for .yos.yaml (highest priority)
+    cwd_yos_config = Path.cwd() / ".yos.yaml"
+    if cwd_yos_config.exists():
+        logger.debug(f"Found config in CWD: {cwd_yos_config}")
+        return cwd_yos_config
+
+    # Check CWD for config.yaml
     cwd_config = Path.cwd() / "config.yaml"
     if cwd_config.exists():
         logger.debug(f"Found config in CWD: {cwd_config}")
         return cwd_config
 
-    # Check XDG config dir
-    home_config_dir = Path(user_config_dir("yap-on-slack", ensure_exists=False))
+    # Check ~/.config/yap-on-slack/config.yaml
+    home_config_dir = Path.home() / ".config" / "yap-on-slack"
     home_config = home_config_dir / "config.yaml"
     if home_config.exists():
         logger.debug(f"Found config in home: {home_config}")
         return home_config
 
-    logger.debug("No config.yaml found")
+    logger.debug("No config file found (.yos.yaml, config.yaml, or ~/.config/yap-on-slack/config.yaml)")
     return None
 
 
