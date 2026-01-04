@@ -1986,7 +1986,7 @@ def get_github_context(
 
                 # Get recent commits
                 if include_commits:
-                    commit_params = {"per_page": items_per_repo.commits}
+                    commit_params: dict[str, Any] = {"per_page": items_per_repo.commits}
                     if date_since:
                         commit_params["since"] = date_since
                     if authors:
