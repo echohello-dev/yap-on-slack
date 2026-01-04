@@ -11,7 +11,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn
 from rich.prompt import Prompt
 from rich.table import Table
 
-from yap_on_slack import __version__
+from yap_on_slack import __version__, get_git_commit
 
 console = Console()
 
@@ -305,7 +305,23 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_version(args: argparse.Namespace) -> int:
     """Print version information."""
-    console.print(f"yap-on-slack {__version__}")
+    version_parts = [f"yap-on-slack {__version__}"]
+
+    # Add git commit if available
+    commit = get_git_commit()
+    if commit:
+        version_parts.append(f"[dim]({commit})[/dim]")
+
+    console.print(" ".join(version_parts))
+
+    # Show GitHub URL
+    github_url = "https://github.com/echohello-dev/yap-on-slack"
+    if commit:
+        commit_url = f"{github_url}/tree/{commit}"
+        console.print(f"[dim]→[/dim] [link={commit_url}]{commit_url}[/link]")
+    else:
+        console.print(f"[dim]→[/dim] [link={github_url}]{github_url}[/link]")
+
     return 0
 
 

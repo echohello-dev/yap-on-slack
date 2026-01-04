@@ -1893,7 +1893,7 @@ def get_authenticated_user(gh_token: str) -> dict[str, Any] | None:
             verify=_SSL_CONTEXT,
         )
         if response.status_code == 200:
-            user = response.json()
+            user: dict[str, Any] = response.json()
             logger.debug(f"Authenticated as: {user.get('login')}")
             return user
         else:
