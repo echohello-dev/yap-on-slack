@@ -362,11 +362,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
         SlackAPIError,
         SlackNetworkError,
         SlackRateLimitError,
+        SSLConfigModel,
+        create_ssl_context,
         fetch_channel_messages,
         generate_system_prompts,
         get_channel_info,
         list_channels,
         load_unified_config,
+        set_ssl_context,
     )
 
     console.print("\n[bold blue]━━━ Yap on Slack: Channel Scanner ━━━[/bold blue]\n")
@@ -388,6 +391,21 @@ def cmd_scan(args: argparse.Namespace) -> int:
     except ValueError as e:
         console.print(f"[bold red]Configuration error:[/bold red] {e}")
         return 1
+
+    # Apply SSL overrides from CLI arguments
+    ssl_config = app_config.ssl
+    if args.no_verify_ssl:
+        ssl_config = SSLConfigModel(verify=False)
+    elif args.ssl_ca_bundle or args.ssl_no_strict:
+        ssl_config = SSLConfigModel(
+            verify=True,
+            ca_bundle=args.ssl_ca_bundle or (ssl_config.ca_bundle if ssl_config else None),
+            no_strict=args.ssl_no_strict or (ssl_config.no_strict if ssl_config else False),
+        )
+
+    # Initialize SSL context before making API calls
+    ssl_context = create_ssl_context(ssl_config)
+    set_ssl_context(ssl_context)
 
     # Apply scan config defaults (CLI args take precedence)
     # Only use config defaults when CLI arg wasn't explicitly provided
@@ -965,6 +983,22 @@ Commands can also be invoked as:
         "--no-export-data",
         action="store_true",
         help="Skip exporting messages, threads, replies, and reactions to a text file",
+    )
+    scan_parser.add_argument(
+        "--no-verify-ssl",
+        action="store_true",
+        help="Disable SSL certificate verification (insecure, use only for testing with corporate proxies)",
+    )
+    scan_parser.add_argument(
+        "--ssl-ca-bundle",
+        type=str,
+        default=None,
+        help="Path to custom CA bundle for SSL verification (e.g., ~/your-corporate-cert.pem)",
+    )
+    scan_parser.add_argument(
+        "--ssl-no-strict",
+        action="store_true",
+        help="Disable strict X509 verification for Python 3.13+ (helpful with corporate proxy certificates)",
     )
     scan_parser.set_defaults(func=cmd_scan)
 
