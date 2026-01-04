@@ -23,14 +23,10 @@ from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
+from rich.progress import (BarColumn, Progress, SpinnerColumn,
+                           TaskProgressColumn, TextColumn)
+from tenacity import (RetryError, retry, retry_if_exception_type,
+                      stop_after_attempt, wait_exponential)
 
 console = Console()
 
@@ -1322,6 +1318,7 @@ def list_channels(
                 cookies=cookies,
                 headers=headers,
                 timeout=15,
+                verify=_SSL_CONTEXT,
             )
             result: dict[str, Any] = response.json()
 
@@ -1492,6 +1489,7 @@ def fetch_channel_messages(
                 cookies=cookies,
                 headers=headers,
                 timeout=15,
+                verify=_SSL_CONTEXT,
             )
             result: dict[str, Any] = response.json()
 
@@ -1584,6 +1582,7 @@ def fetch_channel_messages(
                     cookies=cookies,
                     headers=headers,
                     timeout=15,
+                    verify=_SSL_CONTEXT,
                 )
                 result = response.json()
 
@@ -2129,6 +2128,7 @@ def get_github_context(
                         f"https://api.github.com/repos/{repo}",
                         headers=headers,
                         timeout=10,
+                        verify=_SSL_CONTEXT,
                     )
                     if repo_response.status_code == 200:
                         repo_data = repo_response.json()
@@ -2206,6 +2206,7 @@ def get_github_context(
                         headers=headers,
                         params=pr_params,
                         timeout=10,
+                        verify=_SSL_CONTEXT,
                     )
                     if response.status_code == 200:
                         prs = response.json()
