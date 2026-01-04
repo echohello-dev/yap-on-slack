@@ -870,6 +870,121 @@ yos run --limit 5
 sleep 60 && yos run
 ```
 
+#### 6. SSL/TLS Certificate Errors
+
+**Error:** `SSLError`, `SSL: CERTIFICATE_VERIFY_FAILED`, or `ssl.VERIFY_X509_STRICT`
+
+**Causes:**
+- Corporate proxy with self-signed certificates (common with Netskope, Zscaler, etc.)
+- Python 3.13+ enforces strict X509 verification by default
+- Missing or invalid CA certificates
+
+**Solutions:**
+
+**Option 1: Use standard environment variables (automatic, no config needed)**
+```bash
+# The tool automatically respects these standard environment variables:
+export SSL_CERT_FILE=~/your-corporate-cert.pem        # CA bundle file (standard)
+export REQUESTS_CA_BUNDLE=~/your-corporate-cert.pem   # Used by requests library
+export CURL_CA_BUNDLE=~/your-corporate-cert.pem       # Used by curl
+export SSL_CERT_DIR=/etc/ssl/certs        # CA certificate directory
+
+# For Python 3.13+ with corporate proxies
+export SSL_NO_STRICT=true
+
+# Now just run normally - no additional configuration needed!
+yos run
+```
+
+**Option 2: Use custom CA bundle via config file**
+```bash
+# Create CA bundle with corporate certificates
+cat /path/to/corporate-ca.crt >> ~/your-corporate-cert.pem
+
+# Configure in config file
+cat >> ~/.config/yap-on-slack/config.yaml <<EOF
+ssl:
+  ca_bundle: ~/your-corporate-cert.pem
+  no_strict: true  # Python 3.13+ compat
+EOF
+
+yos run
+```
+
+**Option 3: Use CLI flags**
+```bash
+# Pass CA bundle and disable strict mode via CLI
+yos run --ssl-ca-bundle ~/your-corporate-cert.pem --ssl-no-strict
+```
+
+**Option 4: Disable SSL verification (insecure, testing only)**
+```bash
+# Via CLI flag (not recommended for production)
+yos run --no-verify-ssl
+
+# Or in config file
+ssl:
+  verify: false
+```
+
+# Via config file
+cat >> ~/.config/yap-on-slack/config.yaml <<EOF
+ssl:
+  verify: false
+EOF
+
+# Via environment variable
+export SSL_VERIFY=false
+yos run
+```
+
+**Priority Order:**
+1. CLI flags (highest)
+2. Environment variables (`SSL_VERIFY`, `SSL_CA_BUNDLE`, `SSL_NO_STRICT`)
+3. Standard cert env vars (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `SSL_CERT_DIR`)
+4. Config file
+5. System defaults (lowest)
+
+**Example: Corporate Proxy (Netskope, Zscaler) - Automatic**
+```bash
+# Set once in your shell profile (.zshrc, .bashrc, etc.)
+export REQUESTS_CA_BUNDLE=~/your-corporate-cert.pem
+export SSL_NO_STRICT=true
+
+# Now yos works automatically without any configuration!
+yos run
+```
+
+**Example: Corporate Proxy - Config File**
+```yaml
+# ~/.config/yap-on-slack/config.yaml
+workspace:
+  org_url: https://your-workspace.slack.com
+  channel_id: C0123456789
+  team_id: T0123456789
+
+credentials:
+  xoxc_token: xoxc-your-token
+  xoxd_token: xoxd-your-token
+
+ssl:
+  ca_bundle: ~/your-corporate-cert.pem      # Corporate CA bundle
+  no_strict: true                # Python 3.13+ compat
+```
+
+**Testing SSL configuration:**
+```bash
+# Test with dry-run first
+yos run --dry-run
+
+# With verbose logging to see SSL setup
+yos run --limit 1 --verbose
+
+# Verify environment variables are picked up
+echo "SSL_CERT_FILE: $SSL_CERT_FILE"
+echo "REQUESTS_CA_BUNDLE: $REQUESTS_CA_BUNDLE"
+```
+
 ### Debugging Steps
 
 1. **Verify Configuration File**

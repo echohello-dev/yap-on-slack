@@ -16,6 +16,7 @@ Post realistic support conversations to Slack with proper formatting, threading,
 - ⚙️ **Flexible configuration** - CLI arguments and JSON message definitions
 - ✅ **Message validation** - Schema validation with Pydantic
 - 🔒 **Multiple auth methods** - Session tokens, User OAuth, or Bot tokens
+- 🔐 **SSL/TLS support** - Corporate proxy and self-signed certificate handling
 
 ## Quick Start
 

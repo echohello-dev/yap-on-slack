@@ -7,6 +7,7 @@ import logging
 import os
 import random
 import re
+import ssl
 import subprocess
 import time
 import uuid
@@ -22,10 +23,14 @@ from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.progress import (BarColumn, Progress, SpinnerColumn,
-                           TaskProgressColumn, TextColumn)
-from tenacity import (RetryError, retry, retry_if_exception_type,
-                      stop_after_attempt, wait_exponential)
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 console = Console()
 
@@ -40,6 +45,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# Global SSL context for httpx requests (set by main() based on config/CLI)
+_SSL_CONTEXT: bool | ssl.SSLContext = True  # Default: verify SSL
 
 
 def _load_system_prompt(prompt_name: str) -> str:
@@ -175,6 +183,23 @@ class CredentialsConfigModel(BaseModel):
     cookies: str | None = None
 
 
+class SSLConfigModel(BaseModel):
+    """SSL/TLS verification settings."""
+
+    verify: bool = True
+    ca_bundle: str | None = None
+    no_strict: bool = False
+
+    @field_validator("ca_bundle")
+    @classmethod
+    def ca_bundle_exists(cls, v: str | None) -> str | None:
+        if v is not None:
+            ca_path = Path(v).expanduser()
+            if not ca_path.exists():
+                raise ValueError(f"CA bundle file not found: {ca_path}")
+        return v
+
+
 class UserConfigModel(BaseModel):
     """User configuration with credentials."""
 
@@ -270,6 +295,7 @@ class UnifiedConfig(BaseModel):
 
     workspace: WorkspaceConfigModel
     credentials: CredentialsConfigModel | None = None
+    ssl: SSLConfigModel | None = None
     user_strategy: Literal["round_robin", "random"] = "round_robin"
     users: list[UserConfigModel] = []
     messages: list[MessageConfigModel] = []
@@ -384,6 +410,7 @@ class AppConfig(BaseModel):
     users: list[SlackUser]
     default_user: str | None = None
     strategy: Literal["round_robin", "random"] = "round_robin"
+    ssl: SSLConfigModel = SSLConfigModel()  # Default: SSL verification enabled
 
     def _user_index_by_name(self, name: str) -> int | None:
         for idx, user in enumerate(self.users):
@@ -456,6 +483,106 @@ def _build_slack_cookies(config: dict[str, str]) -> dict[str, str]:
     # Use the token directly - do not URL-decode as Slack expects the original value
     cookies["d"] = config["SLACK_XOXD_TOKEN"]
     return cookies
+
+
+def create_ssl_context(ssl_config: SSLConfigModel | None = None) -> bool | ssl.SSLContext:
+    """Create SSL context based on configuration.
+
+    Automatically respects standard certificate environment variables:
+    - SSL_CERT_FILE: Path to CA bundle file
+    - SSL_CERT_DIR: Path to CA certificate directory
+    - REQUESTS_CA_BUNDLE: Used by requests library
+    - CURL_CA_BUNDLE: Used by curl
+
+    Args:
+        ssl_config: SSL configuration model (None = default verify=True)
+
+    Returns:
+        - True: Use default SSL verification (httpx default behavior)
+        - False: Disable SSL verification (insecure)
+        - ssl.SSLContext: Custom SSL context with specific settings
+
+    Examples:
+        >>> # Default: verify SSL with system certs
+        >>> create_ssl_context()
+        True
+
+        >>> # Disable SSL verification (insecure)
+        >>> create_ssl_context(SSLConfigModel(verify=False))
+        False
+
+        >>> # Use custom CA bundle
+        >>> create_ssl_context(SSLConfigModel(ca_bundle="~/certs/ca.pem"))
+        <ssl.SSLContext object>
+
+        >>> # Disable strict X509 verification (Python 3.13+)
+        >>> create_ssl_context(SSLConfigModel(no_strict=True))
+        <ssl.SSLContext object>
+    """
+    if ssl_config is None:
+        ssl_config = SSLConfigModel()  # Use defaults (verify=True)
+
+    # If verification is disabled, return False
+    if not ssl_config.verify:
+        logger.warning(
+            "SSL verification disabled. This is insecure and should only be used for testing."
+        )
+        return False
+
+    # Check for CA bundle from standard environment variables (priority order)
+    # This allows the tool to work automatically in corporate environments
+    ca_bundle_path = ssl_config.ca_bundle
+    if not ca_bundle_path:
+        for env_var in ["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"]:
+            env_value = os.getenv(env_var)
+            if env_value and Path(env_value).exists():
+                ca_bundle_path = env_value
+                logger.debug(f"Using CA bundle from {env_var}: {ca_bundle_path}")
+                break
+
+    # Check for CA directory from environment
+    ca_cert_dir = os.getenv("SSL_CERT_DIR")
+    if ca_cert_dir and Path(ca_cert_dir).is_dir():
+        logger.debug(f"Using CA cert directory from SSL_CERT_DIR: {ca_cert_dir}")
+
+    # If we need a custom CA bundle/dir or no_strict mode, create custom context
+    if ca_bundle_path or ca_cert_dir or ssl_config.no_strict:
+        context = ssl.create_default_context()
+
+        # Load custom CA bundle if specified
+        if ca_bundle_path:
+            ca_path = Path(ca_bundle_path).expanduser()
+            logger.info(f"Loading custom CA bundle from {ca_path}")
+            try:
+                context.load_verify_locations(cafile=str(ca_path))
+            except Exception as e:
+                logger.error(f"Failed to load CA bundle from {ca_path}: {e}")
+                raise
+
+        # Load CA directory if specified
+        if ca_cert_dir:
+            try:
+                context.load_verify_locations(capath=ca_cert_dir)
+                logger.debug(f"Loaded CA certificates from directory: {ca_cert_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to load CA directory {ca_cert_dir}: {e}")
+
+        # Disable strict X509 verification if requested (Python 3.13+ compatibility)
+        if ssl_config.no_strict:
+            try:
+                # Check if VERIFY_X509_STRICT exists (Python 3.13+)
+                if hasattr(ssl, "VERIFY_X509_STRICT"):
+                    logger.info("Disabling strict X509 verification (Python 3.13+ compatibility)")
+                    context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+                else:
+                    logger.debug("VERIFY_X509_STRICT not available (Python < 3.13)")
+            except AttributeError:
+                logger.debug("Could not disable VERIFY_X509_STRICT (not supported)")
+
+        return context
+
+    # Default: use httpx's default SSL verification
+    return True
 
 
 def discover_config_file(explicit_path: Path | None = None) -> Path | None:
@@ -553,6 +680,9 @@ def load_unified_config(config_path: Path | None = None) -> tuple[AppConfig, dic
         "SLACK_USER_NAME",
         "OPENROUTER_API_KEY",
         "GITHUB_TOKEN",
+        "SSL_VERIFY",
+        "SSL_CA_BUNDLE",
+        "SSL_NO_STRICT",
     ]:
         os_value = os.getenv(key)
         if os_value:
@@ -667,11 +797,25 @@ def load_unified_config(config_path: Path | None = None) -> tuple[AppConfig, dic
             )
         strategy = unified_config.user_strategy
 
+    # Build SSL configuration (env vars override config file)
+    ssl_config = SSLConfigModel()
+    if unified_config and unified_config.ssl:
+        ssl_config = unified_config.ssl
+
+    # Override with environment variables if set
+    if "SSL_VERIFY" in env:
+        ssl_config.verify = env["SSL_VERIFY"].lower() in ("true", "1", "yes")
+    if "SSL_CA_BUNDLE" in env:
+        ssl_config.ca_bundle = env["SSL_CA_BUNDLE"]
+    if "SSL_NO_STRICT" in env:
+        ssl_config.no_strict = env["SSL_NO_STRICT"].lower() in ("true", "1", "yes")
+
     app_config = AppConfig(
         workspace=workspace,
         users=users,
         default_user=default_user,
         strategy=strategy,
+        ssl=ssl_config,
     )
 
     # Add scan config to env for CLI access
@@ -1056,6 +1200,7 @@ def add_reaction(channel: str, timestamp: str, emoji: str, config: dict[str, str
             cookies=cookies,
             headers=headers,
             timeout=5,
+            verify=_SSL_CONTEXT,
         )
         result: dict[str, Any] = response.json()
 
@@ -1247,6 +1392,7 @@ def get_channel_info(config: dict[str, str], channel_id: str) -> dict[str, Any] 
             cookies=cookies,
             headers=headers,
             timeout=10,
+            verify=_SSL_CONTEXT,
         )
         result: dict[str, Any] = response.json()
 
@@ -1639,6 +1785,7 @@ Based on this data, generate 3 comprehensive system prompt variations as a JSON 
                     "max_tokens": 6000,
                 },
                 timeout=60,
+                verify=_SSL_CONTEXT,
             )
 
         if response.status_code != 200:
@@ -1743,6 +1890,7 @@ def get_authenticated_user(gh_token: str) -> dict[str, Any] | None:
             "https://api.github.com/user",
             headers={"Authorization": f"Bearer {gh_token}"},
             timeout=10,
+            verify=_SSL_CONTEXT,
         )
         if response.status_code == 200:
             user = response.json()
@@ -1780,6 +1928,7 @@ def parse_date_since(date_since: str | None) -> str | None:
 
     # Parse relative format like "7d", "30d", "2w"
     import re
+
     match = re.match(r"^(\d+)([dwhm])$", date_since.lower())
     if match:
         amount, unit = int(match.group(1)), match.group(2)
@@ -1831,6 +1980,7 @@ def get_user_repos(
             headers={"Authorization": f"Bearer {gh_token}"},
             params={"sort": "updated", "per_page": 50},
             timeout=10,
+            verify=_SSL_CONTEXT,
         )
         if response.status_code == 200:
             repos = response.json()
@@ -1842,9 +1992,7 @@ def get_user_repos(
                 repo_names = [r for r in repo_names if r not in repo_selection.exclude]
                 excluded_count = original_count - len(repo_names)
                 if excluded_count > 0:
-                    console.print(
-                        f"[dim]Excluded {excluded_count} repo(s) from selection[/dim]"
-                    )
+                    console.print(f"[dim]Excluded {excluded_count} repo(s) from selection[/dim]")
 
             selected = repo_names[:max_repos]
             console.print(
@@ -1998,6 +2146,7 @@ def get_github_context(
                         headers=headers,
                         params=commit_params,
                         timeout=10,
+                        verify=_SSL_CONTEXT,
                     )
                     if response.status_code == 200:
                         commits = response.json()
@@ -2006,10 +2155,7 @@ def get_github_context(
                             commits = [
                                 c
                                 for c in commits
-                                if c.get("commit", {})
-                                .get("author", {})
-                                .get("name")
-                                in authors
+                                if c.get("commit", {}).get("author", {}).get("name") in authors
                                 or c.get("author", {}).get("login") in authors
                             ]
                         fetched = len(commits)
@@ -2051,18 +2197,10 @@ def get_github_context(
                         prs = response.json()
                         # Filter by authors if specified
                         if authors:
-                            prs = [
-                                pr
-                                for pr in prs
-                                if pr.get("user", {}).get("login") in authors
-                            ]
+                            prs = [pr for pr in prs if pr.get("user", {}).get("login") in authors]
                         # Filter by date if specified
                         if date_since:
-                            prs = [
-                                pr
-                                for pr in prs
-                                if pr.get("updated_at", "") >= date_since
-                            ]
+                            prs = [pr for pr in prs if pr.get("updated_at", "") >= date_since]
                         fetched = len(prs)
                         context["prs"].extend(
                             [
@@ -2100,6 +2238,7 @@ def get_github_context(
                         headers=headers,
                         params=issue_params,
                         timeout=10,
+                        verify=_SSL_CONTEXT,
                     )
                     if response.status_code == 200:
                         issues = response.json()
@@ -2227,9 +2366,7 @@ def generate_messages_with_ai(
             for pr in github_context["prs"][:5]:
                 url = pr.get("url", "")
                 state_icon = "🟢" if pr["state"] == "open" else "🟣"
-                context_str += (
-                    f"- {state_icon} <{url}|#{pr['number']}: {pr['title']}> ({pr['state']}) by @{pr['author']}\n"
-                )
+                context_str += f"- {state_icon} <{url}|#{pr['number']}: {pr['title']}> ({pr['state']}) by @{pr['author']}\n"
         if github_context.get("issues"):
             context_str += "\n### Issues (ask about, update, close these!):\n"
             for issue in github_context["issues"][:5]:
@@ -2311,6 +2448,7 @@ def generate_messages_with_ai(
                     },
                 },
                 timeout=30,
+                verify=_SSL_CONTEXT,
             )
 
         if response.status_code == 200:
@@ -2560,6 +2698,7 @@ def post_message(
             cookies=cookies,
             headers=headers,
             timeout=10,
+            verify=_SSL_CONTEXT,
         )
         result: dict[str, Any] = response.json()
 
@@ -2723,6 +2862,22 @@ Examples:
         help="Maximum repositories to fetch GitHub context from (default: 5)",
     )
     parser.add_argument(
+        "--no-verify-ssl",
+        action="store_true",
+        help="Disable SSL certificate verification (insecure, use only for testing with corporate proxies)",
+    )
+    parser.add_argument(
+        "--ssl-ca-bundle",
+        type=str,
+        default=None,
+        help="Path to custom CA bundle for SSL verification (e.g., ~/your-corporate-cert.pem)",
+    )
+    parser.add_argument(
+        "--ssl-no-strict",
+        action="store_true",
+        help="Disable strict X509 verification for Python 3.13+ (helpful with corporate proxy certificates)",
+    )
+    parser.add_argument(
         "--debug-auth",
         action="store_true",
         help="Print safe (redacted) Slack request/response diagnostics on failures",
@@ -2732,6 +2887,8 @@ Examples:
 
 def main() -> None:
     """Main entry point."""
+    global _SSL_CONTEXT
+
     args = parse_args()
 
     # Update log level if verbose
@@ -2759,6 +2916,29 @@ def main() -> None:
         except Exception as legacy_error:
             logger.error(f"Configuration loading failed: {legacy_error}")
             raise
+
+    # Override SSL settings from CLI flags
+    if args.no_verify_ssl or args.ssl_ca_bundle or args.ssl_no_strict:
+        ssl_config = app_config.ssl
+        if args.no_verify_ssl:
+            ssl_config.verify = False
+            logger.info("SSL verification disabled via --no-verify-ssl (insecure)")
+        if args.ssl_ca_bundle:
+            ssl_config.ca_bundle = args.ssl_ca_bundle
+            logger.info(f"Using custom CA bundle: {args.ssl_ca_bundle}")
+        if args.ssl_no_strict:
+            ssl_config.no_strict = True
+            logger.info("Strict X509 verification disabled via --ssl-no-strict")
+
+    # Set global SSL context for httpx requests
+    _SSL_CONTEXT = create_ssl_context(app_config.ssl)
+    if app_config.ssl.verify:
+        if app_config.ssl.ca_bundle:
+            console.print(f"[dim]Using custom CA bundle: {app_config.ssl.ca_bundle}[/dim]")
+        if app_config.ssl.no_strict:
+            console.print("[dim]Strict X509 verification disabled (Python 3.13+ compat)[/dim]")
+    else:
+        console.print("[bold yellow]⚠ SSL verification disabled (insecure)[/bold yellow]")
 
     # Try AI generation if requested
     messages: list[dict[str, Any]] | None = None

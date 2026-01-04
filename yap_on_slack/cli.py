@@ -281,6 +281,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         new_argv.extend(["--github-token", args.github_token])
     if args.github_limit != 5:  # Only add if not default
         new_argv.extend(["--github-limit", str(args.github_limit)])
+    if args.no_verify_ssl:
+        new_argv.append("--no-verify-ssl")
+    if args.ssl_ca_bundle:
+        new_argv.extend(["--ssl-ca-bundle", args.ssl_ca_bundle])
+    if args.ssl_no_strict:
+        new_argv.append("--ssl-no-strict")
     if args.debug_auth:
         new_argv.append("--debug-auth")
 
@@ -826,6 +832,22 @@ Commands can also be invoked as:
         type=int,
         default=5,
         help="Maximum repositories to fetch GitHub context from (default: 5)",
+    )
+    run_parser.add_argument(
+        "--no-verify-ssl",
+        action="store_true",
+        help="Disable SSL certificate verification (insecure, use only for testing with corporate proxies)",
+    )
+    run_parser.add_argument(
+        "--ssl-ca-bundle",
+        type=str,
+        default=None,
+        help="Path to custom CA bundle for SSL verification (e.g., ~/your-corporate-cert.pem)",
+    )
+    run_parser.add_argument(
+        "--ssl-no-strict",
+        action="store_true",
+        help="Disable strict X509 verification for Python 3.13+ (helpful with corporate proxy certificates)",
     )
     run_parser.add_argument(
         "--debug-auth",

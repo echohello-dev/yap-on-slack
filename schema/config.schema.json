@@ -73,6 +73,31 @@
             },
             "additionalProperties": false
         },
+        "ssl": {
+            "type": "object",
+            "description": "SSL/TLS certificate verification settings (optional)",
+            "properties": {
+                "verify": {
+                    "type": "boolean",
+                    "description": "Enable SSL certificate verification (default: true, set to false for self-signed certs - insecure)",
+                    "default": true
+                },
+                "ca_bundle": {
+                    "type": "string",
+                    "description": "Path to custom CA bundle file for SSL verification (e.g., ~/your-corporate-cert.pem for corporate proxies)",
+                    "examples": [
+                        "~/your-corporate-cert.pem",
+                        "/etc/ssl/certs/ca-certificates.crt"
+                    ]
+                },
+                "no_strict": {
+                    "type": "boolean",
+                    "description": "Disable strict X509 verification (Python 3.13+ compatibility for corporate proxy certificates)",
+                    "default": false
+                }
+            },
+            "additionalProperties": false
+        },
         "user_strategy": {
             "type": "string",
             "description": "User selection strategy for multi-user posting",

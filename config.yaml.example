@@ -15,6 +15,18 @@ credentials:
   xoxd_token: xoxd-your-token-here  # Session cookie (starts with xoxd-)
   cookies: ""                        # Optional: extra cookies (semi-colon separated)
 
+# SSL/TLS settings (optional)
+# Useful for corporate proxies or self-signed certificates
+# Note: Automatically respects standard environment variables:
+#   SSL_CERT_FILE, REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE (CA bundle file)
+#   SSL_CERT_DIR (CA certificate directory)
+# ssl:
+#   verify: true                     # Enable SSL verification (default: true)
+#   ca_bundle: ~/your-corporate-cert.pem         # Path to custom CA bundle (for corporate proxies)
+#   no_strict: false                 # Disable strict X509 (Python 3.13+ compat, default: false)
+# CLI overrides: --no-verify-ssl, --ssl-ca-bundle <path>, --ssl-no-strict
+# Env vars: SSL_VERIFY=false, SSL_CA_BUNDLE=~/your-corporate-cert.pem, SSL_NO_STRICT=true
+
 # User selection strategy for multi-user posting
 user_strategy: round_robin  # Options: round_robin | random
 
