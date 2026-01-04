@@ -39,6 +39,8 @@ yos init --local    # Create config.yaml in current directory
 yos run             # Post messages to Slack
 yos run --dry-run   # Validate without posting
 yos run --use-ai    # Generate AI messages
+yos scan -i         # Scan channel interactively and generate system prompts
+yos scan --channel-id C123  # Scan specific channel
 yos --version       # Show version
 ```
 
@@ -113,11 +115,14 @@ ai:
   max_tokens: 4000
   # system_prompt: |  # Optional: custom prompt (overrides default)
   #   Generate realistic Slack messages...
-  # Default prompt: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/post_messages.py#L49
-  temperature: 0.7
-  max_tokens: 4000
-  system_prompt: |  # optional custom prompt
-    Generate realistic Slack messages...
+
+# Channel scanning settings (for `yos scan` command)
+scan:
+  limit: 200                                # Max messages to fetch (10-5000)
+  throttle: 0.5                             # Delay between API batches in seconds
+  output_dir: ~/.config/yap-on-slack/scan   # Where to save prompts and exports
+  model: openrouter/auto                    # Model for prompt generation
+  export_data: true                         # Export messages to text file
 ```
 
 **Environment variables** (override config file):

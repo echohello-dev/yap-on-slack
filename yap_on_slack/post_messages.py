@@ -10,6 +10,7 @@ import re
 import subprocess
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlparse
@@ -22,14 +23,10 @@ from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
+from rich.progress import (BarColumn, Progress, SpinnerColumn,
+                           TaskProgressColumn, TextColumn)
+from tenacity import (RetryError, retry, retry_if_exception_type,
+                      stop_after_attempt, wait_exponential)
 
 console = Console()
 
@@ -278,6 +275,16 @@ class AIConfigModel(BaseModel):
     system_prompt: str | None = None
 
 
+class ScanConfigModel(BaseModel):
+    """Channel scanning settings from config file."""
+
+    limit: int = 200
+    throttle: float = 0.5
+    output_dir: str | None = None
+    model: str = "openrouter/auto"
+    export_data: bool = True
+
+
 class UnifiedConfig(BaseModel):
     """Unified configuration from config.yaml."""
 
@@ -287,6 +294,7 @@ class UnifiedConfig(BaseModel):
     users: list[UserConfigModel] = []
     messages: list[MessageConfigModel] = []
     ai: AIConfigModel | None = None
+    scan: ScanConfigModel | None = None
 
 
 # Legacy Models (for backward compatibility with messages.json)
@@ -675,6 +683,16 @@ def load_unified_config(config_path: Path | None = None) -> tuple[AppConfig, dic
         default_user=default_user,
         strategy=strategy,
     )
+
+    # Add scan config to env for CLI access
+    if unified_config and unified_config.scan:
+        scan = unified_config.scan
+        env["_SCAN_LIMIT"] = str(scan.limit)
+        env["_SCAN_THROTTLE"] = str(scan.throttle)
+        env["_SCAN_MODEL"] = scan.model
+        env["_SCAN_EXPORT_DATA"] = "true" if scan.export_data else "false"
+        if scan.output_dir:
+            env["_SCAN_OUTPUT_DIR"] = scan.output_dir
 
     logger.info(f"Configuration loaded: {len(users)} user{'s' if len(users) != 1 else ''}")
     console.print(
@@ -1099,6 +1117,625 @@ def add_reaction(channel: str, timestamp: str, emoji: str, config: dict[str, str
     except Exception as e:
         logger.error(f"Unexpected error adding reaction: {e}")
         return False
+
+
+# =============================================================================
+# Channel Scanning API Functions
+# =============================================================================
+
+
+@retry(
+    retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError, SlackNetworkError)),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    stop=stop_after_attempt(3),
+    reraise=True,
+)
+def list_channels(
+    config: dict[str, str],
+    types: str = "public_channel,private_channel",
+) -> list[dict[str, Any]]:
+    """List accessible Slack channels.
+
+    Args:
+        config: Configuration dictionary with Slack credentials
+        types: Channel types to list (comma-separated)
+
+    Returns:
+        List of channel dicts with id, name, num_members, is_private
+
+    Raises:
+        SlackNetworkError: If network connection fails after retries
+        SlackRateLimitError: If rate limit is exceeded
+        SlackAPIError: If Slack API returns an error
+    """
+    logger.debug(f"Listing channels (types: {types})")
+
+    all_channels: list[dict[str, Any]] = []
+    cursor: str | None = None
+
+    cookies = _build_slack_cookies(config)
+    headers = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+
+    while True:
+        data: dict[str, Any] = {
+            "token": config["SLACK_XOXC_TOKEN"],
+            "types": types,
+            "exclude_archived": "true",
+            "limit": 200,
+        }
+        if cursor:
+            data["cursor"] = cursor
+
+        try:
+            response = httpx.post(
+                f"{config['SLACK_ORG_URL']}/api/conversations.list",
+                data=data,
+                cookies=cookies,
+                headers=headers,
+                timeout=15,
+            )
+            result: dict[str, Any] = response.json()
+
+            if not result.get("ok"):
+                error = result.get("error", "unknown")
+
+                if error == "ratelimited":
+                    retry_after = response.headers.get("Retry-After", "60")
+                    logger.warning(
+                        f"Rate limited on conversations.list, retry after {retry_after}s"
+                    )
+                    raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
+
+                if error in ("invalid_auth", "token_revoked", "token_expired"):
+                    logger.error(f"Authentication error: {error}")
+                    raise SlackAPIError(f"Authentication error: {error}")
+
+                logger.error(f"Slack API error: {error}")
+                raise SlackAPIError(f"Slack API error: {error}")
+
+            channels = result.get("channels", [])
+            for ch in channels:
+                all_channels.append(
+                    {
+                        "id": ch.get("id", ""),
+                        "name": ch.get("name", ""),
+                        "num_members": ch.get("num_members", 0),
+                        "is_private": ch.get("is_private", False),
+                        "topic": ch.get("topic", {}).get("value", ""),
+                    }
+                )
+
+            # Check for pagination
+            response_metadata = result.get("response_metadata", {})
+            cursor = response_metadata.get("next_cursor")
+            if not cursor:
+                break
+
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            logger.error(f"Network error listing channels: {e}")
+            raise SlackNetworkError(f"Network error: {e}") from e
+        except (SlackRateLimitError, SlackAPIError):
+            raise
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Slack API response: {e}")
+            raise SlackAPIError(f"Invalid JSON response: {e}") from e
+
+    logger.debug(f"Found {len(all_channels)} channels")
+    return all_channels
+
+
+@retry(
+    retry=retry_if_exception_type((httpx.TimeoutException, httpx.NetworkError, SlackNetworkError)),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    stop=stop_after_attempt(3),
+    reraise=True,
+)
+def get_channel_info(config: dict[str, str], channel_id: str) -> dict[str, Any] | None:
+    """Get information about a specific channel.
+
+    Args:
+        config: Configuration dictionary with Slack credentials
+        channel_id: Channel ID to get info for
+
+    Returns:
+        Channel info dict or None if not found
+    """
+    logger.debug(f"Getting channel info for {channel_id}")
+
+    cookies = _build_slack_cookies(config)
+    headers = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+
+    data = {
+        "token": config["SLACK_XOXC_TOKEN"],
+        "channel": channel_id,
+    }
+
+    try:
+        response = httpx.post(
+            f"{config['SLACK_ORG_URL']}/api/conversations.info",
+            data=data,
+            cookies=cookies,
+            headers=headers,
+            timeout=10,
+        )
+        result: dict[str, Any] = response.json()
+
+        if not result.get("ok"):
+            error = result.get("error", "unknown")
+            if error == "channel_not_found":
+                return None
+            raise SlackAPIError(f"Slack API error: {error}")
+
+        ch = result.get("channel", {})
+        return {
+            "id": ch.get("id", ""),
+            "name": ch.get("name", ""),
+            "num_members": ch.get("num_members", 0),
+            "is_private": ch.get("is_private", False),
+            "topic": ch.get("topic", {}).get("value", ""),
+        }
+
+    except (httpx.TimeoutException, httpx.NetworkError) as e:
+        logger.error(f"Network error getting channel info: {e}")
+        raise SlackNetworkError(f"Network error: {e}") from e
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse Slack API response: {e}")
+        raise SlackAPIError(f"Invalid JSON response: {e}") from e
+
+
+def fetch_channel_messages(
+    config: dict[str, str],
+    channel_id: str,
+    limit: int = 200,
+    throttle: float = 1.0,
+    progress_callback: Any | None = None,
+) -> dict[str, Any]:
+    """Fetch messages from a Slack channel with replies and reactions.
+
+    Uses concurrent requests for fetching replies to optimize speed.
+    Throttling is applied between batches, not individual requests.
+
+    Args:
+        config: Configuration dictionary with Slack credentials
+        channel_id: Channel ID to fetch messages from
+        limit: Maximum number of messages to fetch
+        throttle: Delay in seconds between API call batches
+        progress_callback: Optional callback(current, total, status) for progress updates
+
+    Returns:
+        Dict with messages, total_messages, total_replies, total_reactions, top_reactions
+
+    Raises:
+        SlackNetworkError: If network connection fails after retries
+        SlackRateLimitError: If rate limit is exceeded
+        SlackAPIError: If Slack API returns an error
+    """
+    import concurrent.futures
+
+    logger.debug(f"Fetching up to {limit} messages from channel {channel_id}")
+
+    cookies = _build_slack_cookies(config)
+    headers = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+
+    all_messages: list[dict[str, Any]] = []
+    reaction_counts: dict[str, int] = {}
+    total_replies = 0
+    cursor: str | None = None
+    messages_fetched = 0
+
+    # Phase 1: Fetch message history (sequential with pagination)
+    while messages_fetched < limit:
+        batch_limit = min(100, limit - messages_fetched)
+
+        data: dict[str, Any] = {
+            "token": config["SLACK_XOXC_TOKEN"],
+            "channel": channel_id,
+            "limit": batch_limit,
+        }
+        if cursor:
+            data["cursor"] = cursor
+
+        try:
+            response = httpx.post(
+                f"{config['SLACK_ORG_URL']}/api/conversations.history",
+                data=data,
+                cookies=cookies,
+                headers=headers,
+                timeout=15,
+            )
+            result: dict[str, Any] = response.json()
+
+            if not result.get("ok"):
+                error = result.get("error", "unknown")
+
+                if error == "ratelimited":
+                    retry_after = response.headers.get("Retry-After", "60")
+                    logger.warning(f"Rate limited. Try --throttle 2.0 or wait {retry_after}s")
+                    raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
+
+                if error == "channel_not_found":
+                    raise SlackAPIError(
+                        f"Channel {channel_id} not found or not accessible with current credentials"
+                    )
+
+                raise SlackAPIError(f"Slack API error: {error}")
+
+            messages = result.get("messages", [])
+            if not messages:
+                break
+
+            for msg in messages:
+                if msg.get("subtype") and msg.get("subtype") not in ("bot_message", "file_share"):
+                    continue
+
+                message_data: dict[str, Any] = {
+                    "text": msg.get("text", ""),
+                    "user": msg.get("user", ""),
+                    "ts": msg.get("ts", ""),
+                    "reply_count": msg.get("reply_count", 0),
+                    "reactions": [],
+                    "replies": [],
+                }
+
+                for reaction in msg.get("reactions", []):
+                    emoji_name = reaction.get("name", "")
+                    count = reaction.get("count", 0)
+                    message_data["reactions"].append({"name": emoji_name, "count": count})
+                    reaction_counts[emoji_name] = reaction_counts.get(emoji_name, 0) + count
+
+                all_messages.append(message_data)
+                messages_fetched += 1
+
+                if messages_fetched >= limit:
+                    break
+
+            if progress_callback:
+                progress_callback(messages_fetched, limit, f"Fetched {messages_fetched} messages")
+
+            response_metadata = result.get("response_metadata", {})
+            cursor = response_metadata.get("next_cursor")
+            if not cursor or messages_fetched >= limit:
+                break
+
+            # Only throttle between pagination requests
+            time.sleep(throttle)
+
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            logger.error(f"Network error fetching messages: {e}")
+            raise SlackNetworkError(f"Network error: {e}") from e
+        except (SlackRateLimitError, SlackAPIError):
+            raise
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Slack API response: {e}")
+            raise SlackAPIError(f"Invalid JSON response: {e}") from e
+
+    # Phase 2: Fetch replies concurrently in batches
+    threaded_messages = [m for m in all_messages if m.get("reply_count", 0) > 0]
+
+    if threaded_messages:
+        # Batch size for concurrent requests (Slack allows ~50/min, be conservative)
+        batch_size = 10
+
+        def fetch_single_thread(msg: dict[str, Any]) -> tuple[str, list[dict[str, Any]], int]:
+            """Fetch replies for a single thread. Returns (ts, replies, reaction_count)."""
+            thread_ts = msg.get("ts", "")
+            if not thread_ts:
+                return thread_ts, [], 0
+
+            try:
+                response = httpx.post(
+                    f"{config['SLACK_ORG_URL']}/api/conversations.replies",
+                    data={
+                        "token": config["SLACK_XOXC_TOKEN"],
+                        "channel": channel_id,
+                        "ts": thread_ts,
+                        "limit": 100,
+                    },
+                    cookies=cookies,
+                    headers=headers,
+                    timeout=15,
+                )
+                result = response.json()
+
+                if result.get("ok"):
+                    replies_raw = result.get("messages", [])[1:]  # Skip parent
+                    replies = [
+                        {
+                            "text": r.get("text", ""),
+                            "user": r.get("user", ""),
+                            "ts": r.get("ts", ""),
+                        }
+                        for r in replies_raw
+                    ]
+                    # Count reactions in replies
+                    reply_reaction_count = 0
+                    for reply in replies_raw:
+                        for reaction in reply.get("reactions", []):
+                            reply_reaction_count += reaction.get("count", 0)
+                    return thread_ts, replies, reply_reaction_count
+                else:
+                    error = result.get("error", "unknown")
+                    if error == "ratelimited":
+                        retry_after = response.headers.get("Retry-After", "60")
+                        raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
+                    return thread_ts, [], 0
+
+            except (httpx.TimeoutException, httpx.NetworkError, json.JSONDecodeError) as e:
+                logger.warning(f"Failed to fetch replies for {thread_ts}: {e}")
+                return thread_ts, [], 0
+
+        # Process in batches with throttling between batches
+        ts_to_msg = {m["ts"]: m for m in threaded_messages}
+
+        for batch_start in range(0, len(threaded_messages), batch_size):
+            batch = threaded_messages[batch_start : batch_start + batch_size]
+            batch_num = batch_start // batch_size + 1
+            total_batches = (len(threaded_messages) + batch_size - 1) // batch_size
+
+            if progress_callback:
+                progress_callback(
+                    batch_start + len(batch),
+                    len(threaded_messages),
+                    f"Fetching replies (batch {batch_num}/{total_batches})",
+                )
+
+            # Fetch batch concurrently
+            with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
+                futures = {executor.submit(fetch_single_thread, msg): msg for msg in batch}
+
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        thread_ts, replies, reply_rxn_count = future.result()
+                        if thread_ts in ts_to_msg:
+                            ts_to_msg[thread_ts]["replies"] = replies
+                            total_replies += len(replies)
+                            # Add to reaction counts (simplified - just count total)
+                            if reply_rxn_count > 0:
+                                reaction_counts["_reply_reactions"] = (
+                                    reaction_counts.get("_reply_reactions", 0) + reply_rxn_count
+                                )
+                    except SlackRateLimitError:
+                        raise
+                    except Exception as e:
+                        logger.warning(f"Error processing thread: {e}")
+
+            # Throttle between batches (not between individual requests)
+            if batch_start + batch_size < len(threaded_messages):
+                time.sleep(throttle)
+
+    # Sort reactions by count (exclude internal counter)
+    filtered_reactions = {k: v for k, v in reaction_counts.items() if not k.startswith("_")}
+    top_reactions = sorted(filtered_reactions.items(), key=lambda x: x[1], reverse=True)[:10]
+    total_reactions = sum(filtered_reactions.values())
+
+    logger.info(
+        f"Fetched {len(all_messages)} messages, {total_replies} replies, {total_reactions} reactions"
+    )
+
+    return {
+        "messages": all_messages,
+        "total_messages": len(all_messages),
+        "total_replies": total_replies,
+        "total_reactions": total_reactions,
+        "top_reactions": top_reactions,
+    }
+
+
+def generate_system_prompts(
+    channel_data: dict[str, Any],
+    model: str = "openrouter/auto",
+    api_key: str | None = None,
+) -> list[str] | None:
+    """Generate system prompt variations from channel data using OpenRouter.
+
+    Args:
+        channel_data: Channel data with messages, reactions, etc.
+        model: OpenRouter model to use
+        api_key: OpenRouter API key (or uses OPENROUTER_API_KEY env var)
+
+    Returns:
+        List of 3 generated system prompts, or None if generation fails
+    """
+    openrouter_key = api_key or os.getenv("OPENROUTER_API_KEY")
+    if not openrouter_key:
+        logger.error("OPENROUTER_API_KEY not set. Get one at https://openrouter.ai/keys")
+        return None
+
+    logger.info(f"Generating system prompts with {model}...")
+
+    # Format sample messages for the prompt
+    sample_messages: list[str] = []
+    for msg in channel_data.get("messages", [])[:50]:
+        text = msg.get("text", "")
+        if text and len(text) > 10:  # Skip very short messages
+            replies = msg.get("replies", [])
+            reply_texts = [r.get("text", "") for r in replies[:3] if r.get("text")]
+            if reply_texts:
+                sample_messages.append(
+                    f"Message: {text[:500]}\nReplies: {' | '.join(reply_texts[:3])}"
+                )
+            else:
+                sample_messages.append(f"Message: {text[:500]}")
+
+    # Format top reactions
+    top_reactions_str = ", ".join(
+        [f":{name}: ({count})" for name, count in channel_data.get("top_reactions", [])[:10]]
+    )
+
+    system_message = """You are an expert communication analyst and prompt engineer. Your task is to analyze Slack channel conversations and create comprehensive system prompts that capture the unique communication style of the channel.
+
+Analyze the provided channel data carefully, paying attention to:
+
+1. **Tone & Voice**
+   - Formality level (casual, professional, mixed)
+   - Emotional tone (enthusiastic, neutral, supportive, direct)
+   - Use of humor, sarcasm, or wit
+   - First person vs third person patterns
+
+2. **Language Patterns**
+   - Vocabulary complexity and jargon usage
+   - Sentence structure (short/punchy vs long/detailed)
+   - Common phrases, greetings, and sign-offs
+   - Technical terminology frequency
+
+3. **Formatting Conventions**
+   - Emoji usage patterns and favorites
+   - Use of bullet points, numbered lists, code blocks
+   - Message length tendencies (brief vs detailed)
+   - Paragraph structure and line breaks
+
+4. **Interaction Style**
+   - How questions are asked and answered
+   - Threading behavior (when replies vs new messages)
+   - Acknowledgment patterns (reactions, replies)
+   - Collaboration vs individual communication
+
+5. **Content Themes**
+   - Common topics and discussion types
+   - How problems are presented and solved
+   - Update and status message patterns
+   - Celebratory vs informational balance
+
+Generate 3 distinct system prompts, each taking a different angle:
+
+**Prompt 1 - Comprehensive Style Guide**: A detailed prompt covering all aspects of the communication style with specific examples and guidelines.
+
+**Prompt 2 - Persona-Based**: Frame the style as a character or persona that embodies the channel's voice, with personality traits and behavioral guidelines.
+
+**Prompt 3 - Rules & Examples**: A structured prompt with clear rules, do's and don'ts, and concrete message examples to emulate.
+
+Each prompt should:
+- Be 600-1200 words
+- Include real examples extracted from the data (anonymized if needed)
+- Use proper formatting with headers, bullet points, and emphasis
+- Be immediately usable as a system prompt for any LLM
+- Preserve newlines and formatting for readability
+
+Output format: A JSON array with exactly 3 strings. Each string should contain the full prompt with embedded newlines (use \\n for line breaks within the JSON strings)."""
+
+    user_message = f"""# Slack Channel Analysis
+
+**Channel:** #{channel_data.get("name", "unknown")}
+**Messages Analyzed:** {channel_data.get("total_messages", 0)}
+**Threaded Replies:** {channel_data.get("total_replies", 0)}
+**Top Reactions:** {top_reactions_str if top_reactions_str else "None recorded"}
+
+## Sample Messages
+
+The following messages represent the communication patterns in this channel:
+
+---
+{chr(10).join(sample_messages[:30])}
+---
+
+Based on this data, generate 3 comprehensive system prompt variations as a JSON array of 3 strings. Remember to use \\n for newlines within each prompt string."""
+
+    try:
+        with console.status(f"[bold magenta]Generating prompts with {model}...", spinner="dots"):
+            response = httpx.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openrouter_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com/echohello-dev/yap-on-slack",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system_message},
+                        {"role": "user", "content": user_message},
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": 6000,
+                },
+                timeout=60,
+            )
+
+        if response.status_code != 200:
+            error_body = response.text
+            logger.error(f"OpenRouter API error: HTTP {response.status_code}")
+            logger.debug(f"Response: {error_body[:200]}")
+
+            if response.status_code == 401:
+                console.print(
+                    "[bold red]Invalid OPENROUTER_API_KEY. Get one at https://openrouter.ai/keys[/bold red]"
+                )
+            elif response.status_code == 429:
+                console.print("[bold yellow]OpenRouter rate limit. Try again in 60s[/bold yellow]")
+            return None
+
+        result = response.json()
+        content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+        # Try to parse as JSON array
+        try:
+            # Handle potential markdown code blocks
+            if "```" in content:
+                # Extract JSON from code block
+                json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content)
+                if json_match:
+                    content = json_match.group(1)
+
+            # Clean up control characters that break JSON parsing
+            # Replace literal newlines in strings with escaped versions
+            content = content.strip()
+
+            # Try strict parsing first
+            try:
+                prompts = json.loads(content)
+            except json.JSONDecodeError:
+                # Try with control character cleanup
+                # This regex finds strings and escapes unescaped newlines/tabs within them
+                cleaned = re.sub(r"(?<!\\)\n", "\\n", content)
+                cleaned = re.sub(r"(?<!\\)\t", "\\t", cleaned)
+                cleaned = re.sub(r"(?<!\\)\r", "\\r", cleaned)
+                prompts = json.loads(cleaned)
+
+            if isinstance(prompts, list) and len(prompts) >= 3:
+                logger.info(f"Generated {len(prompts)} system prompts")
+                return [str(p) for p in prompts[:3]]
+            else:
+                logger.warning(
+                    f"Expected 3 prompts, got {len(prompts) if isinstance(prompts, list) else 0}"
+                )
+                return None
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse prompts as JSON: {e}")
+            logger.debug(f"Raw content: {content[:500]}")
+
+            # Fallback: try to extract prompts by pattern matching
+            # Look for numbered prompts like "1." or "Prompt 1:" or "## Prompt 1"
+            prompt_pattern = r"(?:^|\n)(?:#{1,3}\s*)?(?:Prompt\s*)?[1-3][\.:)]\s*(.+?)(?=(?:\n(?:#{1,3}\s*)?(?:Prompt\s*)?[2-4][\.:)])|$)"
+            matches = re.findall(prompt_pattern, content, re.DOTALL | re.IGNORECASE)
+
+            if len(matches) >= 3:
+                prompts = [m.strip() for m in matches[:3] if len(m.strip()) > 100]
+                if len(prompts) >= 3:
+                    logger.info("Extracted prompts from numbered sections")
+                    return prompts
+
+            # Second fallback: split by markdown headers or numbered sections
+            sections = re.split(r"\n(?:#{1,3}\s+|(?:\d+[\.\)]\s+))", content)
+            if len(sections) >= 3:
+                prompts = [s.strip() for s in sections if len(s.strip()) > 100][:3]
+                if len(prompts) == 3:
+                    logger.info("Extracted prompts from sections")
+                    return prompts
+
+            # Save error response for debugging
+            error_file = Path(f"prompts/error_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+            error_file.parent.mkdir(parents=True, exist_ok=True)
+            error_file.write_text(content)
+            console.print(f"[yellow]Raw response saved to {error_file}[/yellow]")
+            return None
+
+    except httpx.TimeoutException:
+        logger.error("OpenRouter API request timed out (60s)")
+        return None
+    except Exception as e:
+        logger.error(f"OpenRouter API error: {type(e).__name__}: {e}")
+        return None
 
 
 def get_user_repos(gh_token: str, max_repos: int = 5) -> list[str]:

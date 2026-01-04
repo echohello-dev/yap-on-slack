@@ -106,6 +106,10 @@ yos run --use-ai
 # Dry run (validate without posting)
 yos run --dry-run
 
+# Scan a channel and generate system prompts
+yos scan --interactive
+yos scan --channel-id C1234567890
+
 # Limit messages and add delays
 yos run --limit 5 --delay 3
 
@@ -135,6 +139,16 @@ yos --version
 - `--debug-auth` - Print safe diagnostics on auth failures
 
 **`yos version`** - Show version information
+
+**`yos scan`** - Scan a Slack channel and generate system prompts
+- `--channel-id ID` - Direct channel ID to scan
+- `--interactive, -i` - Interactive channel selector
+- `--limit N` - Maximum messages to fetch (default: 200)
+- `--throttle SECONDS` - Delay between API batches (default: 0.5)
+- `--output-dir PATH` - Output directory (default: ~/.config/yap-on-slack/scan/)
+- `--model MODEL` - OpenRouter model (default: openrouter/auto)
+- `--dry-run` - Fetch and analyze without generating prompts
+- `--no-export-data` - Skip exporting raw messages to text file
 
 Run `yos --help` or `yos run --help` for full options.
 

@@ -3,10 +3,15 @@
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from platformdirs import user_config_dir
 from rich.console import Console
+from rich.progress import (BarColumn, Progress, SpinnerColumn,
+                           TaskProgressColumn, TextColumn)
+from rich.prompt import Prompt
+from rich.table import Table
 
 from yap_on_slack import __version__
 
@@ -159,6 +164,374 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scan(args: argparse.Namespace) -> int:
+    """Scan a Slack channel and generate system prompts."""
+    from yap_on_slack.post_messages import (SlackAPIError, SlackNetworkError,
+                                            SlackRateLimitError,
+                                            fetch_channel_messages,
+                                            generate_system_prompts,
+                                            get_channel_info, list_channels,
+                                            load_unified_config)
+
+    console.print("\n[bold blue]━━━ Yap on Slack: Channel Scanner ━━━[/bold blue]\n")
+
+    # Validate mutually exclusive args
+    if not args.channel_id and not args.interactive:
+        console.print(
+            "[bold red]Error:[/bold red] Must specify either --channel-id or --interactive"
+        )
+        return 1
+
+    if args.channel_id and args.interactive:
+        console.print("[bold red]Error:[/bold red] Cannot use both --channel-id and --interactive")
+        return 1
+
+    # Load configuration
+    try:
+        app_config, env = load_unified_config(args.config)
+    except ValueError as e:
+        console.print(f"[bold red]Configuration error:[/bold red] {e}")
+        return 1
+
+    # Apply scan config defaults (CLI args take precedence)
+    # Only use config defaults when CLI arg wasn't explicitly provided
+    if env.get("_SCAN_LIMIT") and args.limit == 200:  # 200 is the argparse default
+        args.limit = int(env["_SCAN_LIMIT"])
+    if env.get("_SCAN_THROTTLE") and args.throttle == 0.5:  # 0.5 is the argparse default
+        args.throttle = float(env["_SCAN_THROTTLE"])
+    if env.get("_SCAN_MODEL") and args.model == "openrouter/auto":  # default
+        args.model = env["_SCAN_MODEL"]
+    if env.get("_SCAN_OUTPUT_DIR") and args.output_dir is None:
+        args.output_dir = env["_SCAN_OUTPUT_DIR"]
+    if env.get("_SCAN_EXPORT_DATA") == "false" and not args.no_export_data:
+        args.no_export_data = True
+
+    # Build request config from first user
+    if not app_config.users:
+        console.print("[bold red]Error:[/bold red] No users configured")
+        return 1
+
+    user = app_config.users[0]
+    config = {
+        "SLACK_ORG_URL": app_config.workspace.SLACK_ORG_URL,
+        "SLACK_CHANNEL_ID": app_config.workspace.SLACK_CHANNEL_ID,
+        "SLACK_TEAM_ID": app_config.workspace.SLACK_TEAM_ID,
+        "SLACK_XOXC_TOKEN": user.SLACK_XOXC_TOKEN,
+        "SLACK_XOXD_TOKEN": user.SLACK_XOXD_TOKEN,
+    }
+    if user.SLACK_COOKIES:
+        config["SLACK_COOKIES"] = user.SLACK_COOKIES
+
+    channel_id = args.channel_id
+    channel_name = "unknown"
+
+    # Interactive channel selection
+    if args.interactive:
+        console.print("[bold cyan]Fetching available channels...[/bold cyan]")
+        try:
+            channels = list_channels(config)
+        except (SlackAPIError, SlackNetworkError, SlackRateLimitError) as e:
+            console.print(f"[bold red]Error fetching channels:[/bold red] {e}")
+            return 1
+
+        if not channels:
+            console.print(
+                "[bold red]Error:[/bold red] No channels accessible with current credentials"
+            )
+            return 1
+
+        # Display channel table
+        table = Table(title="Available Channels", show_header=True)
+        table.add_column("#", style="cyan", width=4)
+        table.add_column("Name", style="green")
+        table.add_column("ID", style="dim")
+        table.add_column("Members", justify="right", style="magenta")
+        table.add_column("Type", style="yellow")
+
+        for idx, ch in enumerate(channels, 1):
+            ch_type = "🔒 Private" if ch.get("is_private") else "📢 Public"
+            table.add_row(
+                str(idx),
+                ch.get("name", ""),
+                ch.get("id", ""),
+                str(ch.get("num_members", 0)),
+                ch_type,
+            )
+
+        console.print(table)
+        console.print()
+
+        # Auto-select if only one channel
+        if len(channels) == 1:
+            selected = channels[0]
+            confirm = Prompt.ask(
+                f"Only one channel available: #{selected['name']}. Use it?",
+                choices=["y", "n"],
+                default="y",
+            )
+            if confirm.lower() != "y":
+                console.print("[yellow]Aborted.[/yellow]")
+                return 0
+            channel_id = selected["id"]
+            channel_name = selected["name"]
+        else:
+            # Let user select
+            max_attempts = 3
+            for attempt in range(max_attempts):
+                selection = Prompt.ask(
+                    "Enter channel number or name (partial match supported)",
+                    default="1",
+                )
+
+                # Try to match by number first
+                try:
+                    idx = int(selection) - 1
+                    if 0 <= idx < len(channels):
+                        selected = channels[idx]
+                        channel_id = selected["id"]
+                        channel_name = selected["name"]
+                        break
+                except ValueError:
+                    pass
+
+                # Try partial name match
+                selection_lower = selection.lower()
+                matches = [ch for ch in channels if selection_lower in ch.get("name", "").lower()]
+
+                if len(matches) == 1:
+                    selected = matches[0]
+                    channel_id = selected["id"]
+                    channel_name = selected["name"]
+                    break
+                elif len(matches) > 1:
+                    console.print(
+                        f"[yellow]Multiple matches:[/yellow] {', '.join(m['name'] for m in matches[:5])}"
+                    )
+                    console.print("Please be more specific.")
+                else:
+                    console.print(f"[red]No channel matching '{selection}'[/red]")
+
+                if attempt == max_attempts - 1:
+                    console.print("[bold red]Max attempts reached. Aborting.[/bold red]")
+                    return 1
+
+        console.print(f"\n[bold green]✓ Selected:[/bold green] #{channel_name} ({channel_id})")
+    else:
+        # Validate provided channel ID
+        console.print(f"[bold cyan]Validating channel {channel_id}...[/bold cyan]")
+        try:
+            channel_info = get_channel_info(config, channel_id)
+            if not channel_info:
+                console.print(
+                    f"[bold red]Error:[/bold red] Channel {channel_id} not found or not accessible"
+                )
+                return 1
+            channel_name = channel_info.get("name", "unknown")
+            console.print(f"[bold green]✓ Found:[/bold green] #{channel_name}")
+        except (SlackAPIError, SlackNetworkError) as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            return 1
+
+    # Fetch messages
+    console.print("\n[bold blue]━━━ Fetching Messages ━━━[/bold blue]")
+    console.print(f"  Channel: [cyan]#{channel_name}[/cyan]")
+    console.print(f"  Limit: [cyan]{args.limit}[/cyan] messages")
+    console.print(f"  Throttle: [cyan]{args.throttle}s[/cyan] between requests")
+    console.print()
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[green]Fetching messages...", total=args.limit)
+
+            def update_progress(current: int, total: int, status: str) -> None:
+                progress.update(task, completed=current, description=f"[green]{status}")
+
+            channel_data = fetch_channel_messages(
+                config,
+                channel_id,
+                limit=args.limit,
+                throttle=args.throttle,
+                progress_callback=update_progress,
+            )
+            channel_data["name"] = channel_name
+
+    except SlackRateLimitError as e:
+        console.print(f"\n[bold yellow]Rate limited:[/bold yellow] {e}")
+        console.print("Try using [cyan]--throttle 2.0[/cyan] or wait before retrying")
+        return 1
+    except (SlackAPIError, SlackNetworkError) as e:
+        console.print(f"\n[bold red]Error:[/bold red] {e}")
+        return 1
+
+    # Display summary
+    console.print("\n[bold blue]━━━ Analysis Summary ━━━[/bold blue]")
+    summary_table = Table(show_header=False, box=None)
+    summary_table.add_column("Metric", style="cyan")
+    summary_table.add_column("Value", style="green")
+
+    summary_table.add_row("Messages fetched", str(channel_data["total_messages"]))
+    summary_table.add_row("Replies included", str(channel_data["total_replies"]))
+    summary_table.add_row("Reactions counted", str(channel_data["total_reactions"]))
+
+    top_reactions = channel_data.get("top_reactions", [])[:5]
+    if top_reactions:
+        reaction_str = " ".join([f":{name}: ({count})" for name, count in top_reactions])
+        summary_table.add_row("Top reactions", reaction_str)
+
+    console.print(summary_table)
+
+    # Check for insufficient data
+    if channel_data["total_messages"] < 10:
+        console.print(
+            f"\n[bold yellow]Warning:[/bold yellow] Only {channel_data['total_messages']} messages found. "
+            "Prompts may be low quality."
+        )
+
+    if channel_data["total_replies"] == 0:
+        console.print("[dim]Note: No threaded conversations found.[/dim]")
+
+    if channel_data["total_reactions"] == 0:
+        console.print("[dim]Note: No reactions found.[/dim]")
+
+    # Resolve output directory (default to ~/.config/yap-on-slack/scan/)
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    else:
+        output_dir = Path.home() / ".config" / "yap-on-slack" / "scan"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Export data by default (unless --no-export-data)
+    export_file: Path | None = None
+    if not args.no_export_data:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_file = output_dir / f"channel_export_{channel_name}_{timestamp}.txt"
+
+        lines: list[str] = []
+        lines.append(f"# Channel Export: #{channel_name}")
+        lines.append(f"# Channel ID: {channel_id}")
+        lines.append(f"# Exported: {datetime.now().isoformat()}")
+        lines.append(f"# Total Messages: {channel_data['total_messages']}")
+        lines.append(f"# Total Replies: {channel_data['total_replies']}")
+        lines.append(f"# Total Reactions: {channel_data['total_reactions']}")
+        lines.append("")
+
+        # Top reactions summary
+        top_reactions = channel_data.get("top_reactions", [])
+        if top_reactions:
+            lines.append("## Top Reactions")
+            for name, count in top_reactions:
+                lines.append(f"  :{name}: - {count}")
+            lines.append("")
+
+        lines.append("=" * 80)
+        lines.append("")
+
+        # Export each message with replies and reactions
+        for idx, msg in enumerate(channel_data.get("messages", []), 1):
+            text = msg.get("text", "").strip()
+            user = msg.get("user", "unknown")
+            ts = msg.get("ts", "")
+            reactions = msg.get("reactions", [])
+            replies = msg.get("replies", [])
+
+            lines.append(f"[Message {idx}] @{user} ({ts})")
+            lines.append(text if text else "(empty message)")
+
+            # Show reactions on main message
+            if reactions:
+                reaction_str = " ".join([f":{r['name']}:({r['count']})" for r in reactions])
+                lines.append(f"  Reactions: {reaction_str}")
+
+            # Show replies
+            if replies:
+                lines.append(f"  └─ {len(replies)} repl{'y' if len(replies) == 1 else 'ies'}:")
+                for reply_idx, reply in enumerate(replies, 1):
+                    reply_text = reply.get("text", "").strip()
+                    reply_user = reply.get("user", "unknown")
+                    reply_ts = reply.get("ts", "")
+                    prefix = "└" if reply_idx == len(replies) else "├"
+                    lines.append(f"     {prefix}─ @{reply_user} ({reply_ts})")
+                    # Indent reply text
+                    for line in (reply_text or "(empty)").split("\n"):
+                        lines.append(f"        {line}")
+
+            lines.append("-" * 40)
+            lines.append("")
+
+        export_file.write_text("\n".join(lines))
+        console.print("\n[bold green]✓ Exported channel data[/bold green]")
+        console.print(
+            f"  [dim]{len(channel_data.get('messages', []))} messages, {channel_data['total_replies']} replies, {channel_data['total_reactions']} reactions[/dim]"
+        )
+        console.print(
+            f"\n  [link=file://{export_file.absolute()}][cyan]{export_file.absolute()}[/cyan][/link]"
+        )
+
+    # Dry run mode - stop here
+    if args.dry_run:
+        console.print("\n[bold green]✓ Dry run complete[/bold green]")
+        console.print(f"Would generate prompts with model: [cyan]{args.model}[/cyan]")
+        if export_file:
+            console.print(f"\n[bold]Channel data saved to:[/bold] {export_file.absolute()}")
+        return 0
+
+    # Generate prompts
+    console.print("\n[bold blue]━━━ Generating System Prompts ━━━[/bold blue]")
+    console.print(f"  Model: [cyan]{args.model}[/cyan]")
+
+    openrouter_key = env.get("OPENROUTER_API_KEY")
+    prompts = generate_system_prompts(channel_data, model=args.model, api_key=openrouter_key)
+
+    if not prompts:
+        console.print("[bold red]Error:[/bold red] Failed to generate prompts")
+        return 1
+
+    # Save prompts
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_files: list[Path] = []
+
+    for i, prompt in enumerate(prompts, 1):
+        filename = f"system_prompt_draft_{timestamp}_{i}.md"
+        filepath = output_dir / filename
+
+        content = f"""# System Prompt Draft {i}
+
+Generated: {datetime.now().isoformat()}
+Model: {args.model}
+Channel: #{channel_name} ({channel_id})
+Messages analyzed: {channel_data["total_messages"]}
+
+---
+
+{prompt}
+"""
+        filepath.write_text(content)
+        output_files.append(filepath)
+
+    # Display results
+    console.print(f"\n[bold green]✓ Generated {len(prompts)} system prompt drafts[/bold green]\n")
+
+    result_table = Table(title="System Prompt Drafts", show_header=True)
+    result_table.add_column("Draft", style="cyan", width=8)
+    result_table.add_column("File", style="yellow")
+    result_table.add_column("Size", justify="right", style="magenta")
+
+    for i, filepath in enumerate(output_files, 1):
+        size = f"{filepath.stat().st_size:,} bytes"
+        abs_path = str(filepath.absolute())
+        result_table.add_row(f"#{i}", f"[link=file://{abs_path}]{abs_path}[/link]", size)
+
+    console.print(result_table)
+
+    return 0
+
+
 def main() -> None:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -181,6 +554,12 @@ Examples:
 
   # Dry run (validate without posting)
   yos run --dry-run
+
+  # Scan a channel interactively and generate prompts
+  yos scan --interactive
+
+  # Scan a specific channel
+  yos scan --channel-id C1234567890 --limit 500
 
 Commands can also be invoked as:
   yaponslack <command>
@@ -277,6 +656,65 @@ Commands can also be invoked as:
         help="Print safe (redacted) Slack request/response diagnostics on failures",
     )
     run_parser.set_defaults(func=cmd_run)
+
+    # Scan command
+    scan_parser = subparsers.add_parser(
+        "scan",
+        help="Scan a Slack channel and generate system prompts",
+        description="Analyze channel writing style and generate system prompt variations using AI",
+    )
+    channel_group = scan_parser.add_mutually_exclusive_group(required=True)
+    channel_group.add_argument(
+        "--channel-id",
+        type=str,
+        help="Direct channel ID to scan (e.g., C1234567890)",
+    )
+    channel_group.add_argument(
+        "--interactive",
+        "-i",
+        action="store_true",
+        help="Interactive channel selector",
+    )
+    scan_parser.add_argument(
+        "--config",
+        type=Path,
+        help="Path to config.yaml file",
+    )
+    scan_parser.add_argument(
+        "--limit",
+        type=int,
+        default=200,
+        help="Maximum messages to fetch (default: 200)",
+    )
+    scan_parser.add_argument(
+        "--throttle",
+        type=float,
+        default=0.5,
+        help="Delay between API call batches in seconds (default: 0.5)",
+    )
+    scan_parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Directory for generated prompts (default: ~/.config/yap-on-slack/scan/)",
+    )
+    scan_parser.add_argument(
+        "--model",
+        type=str,
+        default="openrouter/auto",
+        help="OpenRouter model for prompt generation (default: openrouter/auto)",
+    )
+    scan_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Fetch and analyze without generating prompts",
+    )
+    scan_parser.add_argument(
+        "--no-export-data",
+        action="store_true",
+        help="Skip exporting messages, threads, replies, and reactions to a text file",
+    )
+    scan_parser.set_defaults(func=cmd_scan)
 
     # Version command
     version_parser = subparsers.add_parser(

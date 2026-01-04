@@ -253,6 +253,50 @@
                 }
             },
             "additionalProperties": false
+        },
+        "scan": {
+            "type": "object",
+            "description": "Channel scanning and system prompt generation settings",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum messages to fetch when scanning",
+                    "minimum": 10,
+                    "maximum": 5000,
+                    "default": 200
+                },
+                "throttle": {
+                    "type": "number",
+                    "description": "Delay in seconds between API call batches",
+                    "minimum": 0.1,
+                    "maximum": 10.0,
+                    "default": 0.5
+                },
+                "output_dir": {
+                    "type": "string",
+                    "description": "Directory for generated prompts and exports (default: ~/.config/yap-on-slack/scan/)",
+                    "examples": [
+                        "~/.config/yap-on-slack/scan",
+                        "./prompts"
+                    ]
+                },
+                "model": {
+                    "type": "string",
+                    "description": "OpenRouter model for system prompt generation",
+                    "default": "openrouter/auto",
+                    "examples": [
+                        "openrouter/auto",
+                        "anthropic/claude-sonnet-4",
+                        "google/gemini-2.5-flash"
+                    ]
+                },
+                "export_data": {
+                    "type": "boolean",
+                    "description": "Export messages, threads, and reactions to text file",
+                    "default": true
+                }
+            },
+            "additionalProperties": false
         }
     },
     "additionalProperties": false

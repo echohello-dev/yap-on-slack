@@ -60,6 +60,14 @@ ai:
   #   Generate realistic Slack messages for testing...
   # Default system prompt: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/post_messages.py#L49
 
+# Channel scanning settings (for `yos scan` command)
+# scan:
+#   limit: 200                                # Max messages to fetch (10-5000)
+#   throttle: 0.5                             # Delay between API batches in seconds
+#   output_dir: ~/.config/yap-on-slack/scan   # Where to save prompts and exports
+#   model: openrouter/auto                    # Model for prompt generation
+#   export_data: true                         # Export messages to text file
+
 # Note: Environment variables take precedence over config file values:
 # - SLACK_XOXC_TOKEN, SLACK_XOXD_TOKEN override credentials
 # - SLACK_ORG_URL, SLACK_CHANNEL_ID, SLACK_TEAM_ID override workspace
