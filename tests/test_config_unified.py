@@ -6,11 +6,16 @@ from unittest.mock import patch
 
 import pytest
 
-from yap_on_slack.post_messages import (AIConfigModel, CredentialsConfigModel,
-                                        MessageConfigModel, UnifiedConfig,
-                                        UserConfigModel, WorkspaceConfigModel,
-                                        discover_config_file,
-                                        load_unified_config)
+from yap_on_slack.post_messages import (
+    AIConfigModel,
+    CredentialsConfigModel,
+    MessageConfigModel,
+    UnifiedConfig,
+    UserConfigModel,
+    WorkspaceConfigModel,
+    discover_config_file,
+    load_unified_config,
+)
 
 
 class TestWorkspaceConfigModel:

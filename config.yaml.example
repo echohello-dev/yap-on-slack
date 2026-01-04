@@ -60,6 +60,36 @@ ai:
   #   Generate realistic Slack messages for testing...
   # Default system prompt: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/prompts/generate_messages.txt
 
+  # GitHub context integration (optional)
+  github:
+    enabled: true                             # Enable GitHub context fetching
+    token: ""                                 # Optional: explicit token (or use GITHUB_TOKEN env var)
+    limit: 5                                  # Max repos to fetch (1-20)
+    
+    # Per-category item limits
+    items_per_repo:
+      commits: 5                              # Max commits per repo
+      prs: 5                                  # Max PRs per repo
+      issues: 5                               # Max issues per repo
+    
+    # Repository selection (optional)
+    repos:
+      mode: auto                              # Options: auto (recent), include (specific), exclude (blacklist)
+      # include:                              # Specific repos (when mode=include)
+      #   - echohello-dev/yap-on-slack
+      #   - myorg/important-project
+      # exclude:                              # Skip these repos (when mode=exclude)
+      #   - myorg/archived-repo
+    
+    # Filtering options
+    date_since: ""                            # Filter data since date (e.g., "7d", "30d", "2024-01-01")
+    authors:                                  # Filter by authors (use "@me" for authenticated user)
+      # - "@me"                               # Special: your GitHub username
+      # - "dependabot[bot]"                   # Or specific usernames
+    pr_state: all                             # Options: open, closed, all
+    issue_state: all                          # Options: open, closed, all
+    include_repo_metadata: true               # Include language, topics, stars, description
+
 # Channel scanning settings (for `yos scan` command)
 # scan:
 #   limit: 200                                # Max messages to fetch (10-5000)

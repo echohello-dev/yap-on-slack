@@ -72,18 +72,46 @@ ai:
     enabled: true
     token: ghp_xxxxxxxxxxxx  # optional, falls back to env var
     limit: 5                  # max repos to fetch
-    include_commits: true
-    include_prs: true
-    include_issues: true
+    
+    # Enhanced filtering (NEW!)
+    items_per_repo:
+      commits: 5              # commits per repo
+      prs: 5                  # PRs per repo
+      issues: 5               # issues per repo
+    
+    repos:
+      mode: auto              # auto, include, or exclude
+      # include:              # specific repos to fetch
+      #   - echohello-dev/yap-on-slack
+      # exclude:              # repos to skip
+      #   - myorg/archived-repo
+    
+    date_since: "7d"          # filter since (7d, 30d, 2024-01-01)
+    authors:                  # filter by authors
+      - "@me"                 # authenticated user
+      # - "octocat"           # or specific usernames
+    
+    pr_state: all             # open, closed, all
+    issue_state: all          # open, closed, all
+    include_repo_metadata: true  # include lang, topics, stars
 
 # Alternatively, GitHub config can be at top level:
 github:
   enabled: true
   token: ghp_xxxxxxxxxxxx
   limit: 5
-  include_commits: true
-  include_prs: true
-  include_issues: true
+  items_per_repo:
+    commits: 5
+    prs: 5
+    issues: 5
+  repos:
+    mode: auto
+  date_since: "7d"
+  authors:
+    - "@me"
+  pr_state: all
+  issue_state: all
+  include_repo_metadata: true
 
 # Optional: multiple users, messages
 # See config.yaml.example for full structure

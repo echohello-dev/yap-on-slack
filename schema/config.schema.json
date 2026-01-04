@@ -250,6 +250,10 @@
                     "examples": [
                         "Generate realistic engineering team Slack messages about infrastructure issues..."
                     ]
+                },
+                "github": {
+                    "$ref": "#/properties/github",
+                    "description": "GitHub context settings for AI generation (alternative location to top-level github)"
                 }
             },
             "additionalProperties": false
@@ -336,6 +340,123 @@
                 "include_issues": {
                     "type": "boolean",
                     "description": "Include recent issues in AI context",
+                    "default": true
+                },
+                "items_per_repo": {
+                    "type": "object",
+                    "description": "Per-category item limits when fetching from each repository",
+                    "properties": {
+                        "commits": {
+                            "type": "integer",
+                            "description": "Maximum commits to fetch per repository",
+                            "minimum": 1,
+                            "maximum": 100,
+                            "default": 5
+                        },
+                        "prs": {
+                            "type": "integer",
+                            "description": "Maximum pull requests to fetch per repository",
+                            "minimum": 1,
+                            "maximum": 100,
+                            "default": 5
+                        },
+                        "issues": {
+                            "type": "integer",
+                            "description": "Maximum issues to fetch per repository",
+                            "minimum": 1,
+                            "maximum": 100,
+                            "default": 5
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "repos": {
+                    "type": "object",
+                    "description": "Repository selection configuration",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "description": "Repository selection mode: auto (recently updated), include (specific repos), exclude (blacklist)",
+                            "enum": [
+                                "auto",
+                                "include",
+                                "exclude"
+                            ],
+                            "default": "auto"
+                        },
+                        "include": {
+                            "type": "array",
+                            "description": "Specific repositories to fetch (when mode=include). Format: owner/repo",
+                            "items": {
+                                "type": "string",
+                                "pattern": "^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$",
+                                "examples": [
+                                    "echohello-dev/yap-on-slack",
+                                    "myorg/project"
+                                ]
+                            }
+                        },
+                        "exclude": {
+                            "type": "array",
+                            "description": "Repositories to exclude (when mode=exclude). Format: owner/repo",
+                            "items": {
+                                "type": "string",
+                                "pattern": "^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$",
+                                "examples": [
+                                    "myorg/archived-repo",
+                                    "myorg/test-repo"
+                                ]
+                            }
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "date_since": {
+                    "type": "string",
+                    "description": "Filter data since this date. Use ISO date (YYYY-MM-DD) or relative format (7d, 30d, 2w, 24h)",
+                    "examples": [
+                        "7d",
+                        "30d",
+                        "2024-01-01",
+                        "2024-12-01T00:00:00Z"
+                    ],
+                    "pattern": "^(\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2}(.\\d+)?Z?)?|\\d+[dhwm])$"
+                },
+                "authors": {
+                    "type": "array",
+                    "description": "Filter by GitHub usernames. Use '@me' for authenticated user",
+                    "items": {
+                        "type": "string",
+                        "examples": [
+                            "@me",
+                            "octocat",
+                            "dependabot[bot]"
+                        ]
+                    }
+                },
+                "pr_state": {
+                    "type": "string",
+                    "description": "Filter pull requests by state",
+                    "enum": [
+                        "open",
+                        "closed",
+                        "all"
+                    ],
+                    "default": "all"
+                },
+                "issue_state": {
+                    "type": "string",
+                    "description": "Filter issues by state",
+                    "enum": [
+                        "open",
+                        "closed",
+                        "all"
+                    ],
+                    "default": "all"
+                },
+                "include_repo_metadata": {
+                    "type": "boolean",
+                    "description": "Include repository metadata (language, topics, stars, description) in AI context",
                     "default": true
                 }
             },

@@ -10,7 +10,7 @@ import re
 import subprocess
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlparse
@@ -22,14 +22,10 @@ from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
+from rich.progress import (BarColumn, Progress, SpinnerColumn,
+                           TaskProgressColumn, TextColumn)
+from tenacity import (RetryError, retry, retry_if_exception_type,
+                      stop_after_attempt, wait_exponential)
 
 console = Console()
 
@@ -211,6 +207,22 @@ class MessageConfigModel(BaseModel):
     reactions: list[str] = []
 
 
+class GitHubItemLimitsModel(BaseModel):
+    """Per-category item limits for GitHub fetching."""
+
+    commits: int = 5  # Max commits per repo
+    prs: int = 5  # Max PRs per repo
+    issues: int = 5  # Max issues per repo
+
+
+class GitHubRepoSelectionModel(BaseModel):
+    """Repository selection configuration."""
+
+    mode: Literal["auto", "include", "exclude"] = "auto"
+    include: list[str] = []  # Specific repos to include (owner/repo format)
+    exclude: list[str] = []  # Repos to exclude (owner/repo format)
+
+
 class GitHubConfigModel(BaseModel):
     """GitHub integration settings from config file."""
 
@@ -220,6 +232,15 @@ class GitHubConfigModel(BaseModel):
     include_commits: bool = True
     include_prs: bool = True
     include_issues: bool = True
+
+    # Enhanced filtering options
+    items_per_repo: GitHubItemLimitsModel = GitHubItemLimitsModel()
+    repos: GitHubRepoSelectionModel = GitHubRepoSelectionModel()
+    date_since: str | None = None  # ISO date or relative (e.g., "7d", "2024-01-01")
+    authors: list[str] = []  # Filter by authors (use "@me" for authenticated user)
+    pr_state: Literal["open", "closed", "all"] = "all"
+    issue_state: Literal["open", "closed", "all"] = "all"
+    include_repo_metadata: bool = True  # Include language, topics, stars, etc.
 
 
 class AIConfigModel(BaseModel):
@@ -1707,27 +1728,124 @@ Based on this data, generate 3 comprehensive system prompt variations as a JSON 
         return None
 
 
-def get_user_repos(gh_token: str, max_repos: int = 5) -> list[str]:
+def get_authenticated_user(gh_token: str) -> dict[str, Any] | None:
+    """Fetch the authenticated user's information from GitHub.
+
+    Args:
+        gh_token: GitHub API token
+
+    Returns:
+        Dictionary with user info (login, name, etc.) or None if failed
+    """
+    try:
+        logger.debug("Fetching authenticated user info...")
+        response = httpx.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"Bearer {gh_token}"},
+            timeout=10,
+        )
+        if response.status_code == 200:
+            user = response.json()
+            logger.debug(f"Authenticated as: {user.get('login')}")
+            return user
+        else:
+            logger.warning(f"GitHub user API returned status {response.status_code}")
+    except httpx.TimeoutException:
+        logger.error("Timeout fetching user info from GitHub")
+    except Exception as e:
+        logger.error(f"Error fetching user info: {type(e).__name__}: {e}")
+    return None
+
+
+def parse_date_since(date_since: str | None) -> str | None:
+    """Parse date_since config into ISO format for GitHub API.
+
+    Args:
+        date_since: Date string like "7d", "30d", "2024-01-01", or ISO timestamp
+
+    Returns:
+        ISO 8601 timestamp string or None
+    """
+    if not date_since:
+        return None
+
+    # Check if already ISO format
+    if "T" in date_since or len(date_since) == 10:
+        try:
+            # Validate and normalize
+            dt = datetime.fromisoformat(date_since.replace("Z", "+00:00"))
+            return dt.isoformat()
+        except ValueError:
+            pass
+
+    # Parse relative format like "7d", "30d", "2w"
+    import re
+    match = re.match(r"^(\d+)([dwhm])$", date_since.lower())
+    if match:
+        amount, unit = int(match.group(1)), match.group(2)
+        now = datetime.now()
+        if unit == "d":  # days
+            dt = now - timedelta(days=amount)
+        elif unit == "w":  # weeks
+            dt = now - timedelta(weeks=amount)
+        elif unit == "h":  # hours
+            dt = now - timedelta(hours=amount)
+        elif unit == "m":  # minutes
+            dt = now - timedelta(minutes=amount)
+        else:
+            return None
+        return dt.isoformat()
+
+    logger.warning(f"Invalid date_since format: {date_since}")
+    return None
+
+
+def get_user_repos(
+    gh_token: str,
+    max_repos: int = 5,
+    repo_selection: GitHubRepoSelectionModel | None = None,
+) -> list[str]:
     """Fetch the authenticated user's repos, prioritizing recent activity.
 
     Args:
         gh_token: GitHub API token
         max_repos: Maximum number of repos to return
+        repo_selection: Optional repo selection configuration (include/exclude mode)
 
     Returns:
         List of repository full names (owner/repo)
     """
+    # Handle explicit include mode
+    if repo_selection and repo_selection.mode == "include" and repo_selection.include:
+        console.print(
+            f"[bold green]✓ Using {len(repo_selection.include)} explicitly included repos[/bold green]"
+        )
+        for i, repo in enumerate(repo_selection.include, 1):
+            console.print(f"  [cyan][{i}][/cyan] {repo}")
+        return repo_selection.include[:max_repos]
+
     try:
         logger.debug(f"Fetching user's repositories (top {max_repos})...")
         response = httpx.get(
             "https://api.github.com/user/repos",
             headers={"Authorization": f"Bearer {gh_token}"},
-            params={"sort": "updated", "per_page": 20},
+            params={"sort": "updated", "per_page": 50},
             timeout=10,
         )
         if response.status_code == 200:
             repos = response.json()
             repo_names = [r.get("full_name") for r in repos if r.get("full_name")]
+
+            # Apply exclude filter if specified
+            if repo_selection and repo_selection.mode == "exclude" and repo_selection.exclude:
+                original_count = len(repo_names)
+                repo_names = [r for r in repo_names if r not in repo_selection.exclude]
+                excluded_count = original_count - len(repo_names)
+                if excluded_count > 0:
+                    console.print(
+                        f"[dim]Excluded {excluded_count} repo(s) from selection[/dim]"
+                    )
+
             selected = repo_names[:max_repos]
             console.print(
                 f"[bold green]✓ Found {len(repo_names)} user repos, using top {len(selected)}[/bold green]"
@@ -1754,6 +1872,7 @@ def get_github_context(
     include_commits: bool = True,
     include_prs: bool = True,
     include_issues: bool = True,
+    github_config: GitHubConfigModel | None = None,
 ) -> dict[str, Any] | None:
     """Fetch recent commits, PRs, and issues from user's repositories.
 
@@ -1765,9 +1884,10 @@ def get_github_context(
         include_commits: Include commits in context
         include_prs: Include PRs in context
         include_issues: Include issues in context
+        github_config: Full GitHub config model with enhanced options
 
     Returns:
-        Dictionary with commits, prs, and issues, or None if unavailable
+        Dictionary with commits, prs, issues, and metadata, or None if unavailable
     """
     if not enabled:
         logger.debug("GitHub context disabled")
@@ -1799,12 +1919,36 @@ def get_github_context(
         logger.warning("No GitHub token available, skipping GitHub context")
         return None
 
-    context: dict[str, Any] = {"commits": [], "prs": [], "issues": []}
+    # Get authenticated user info for @me resolution
+    authenticated_user = get_authenticated_user(gh_token)
+    authenticated_username = authenticated_user.get("login") if authenticated_user else None
+
+    # Resolve @me in authors list
+    authors = []
+    if github_config and github_config.authors:
+        for author in github_config.authors:
+            if author == "@me" and authenticated_username:
+                authors.append(authenticated_username)
+            elif author != "@me":
+                authors.append(author)
+
+    # Parse date filter
+    date_since = None
+    if github_config and github_config.date_since:
+        date_since = parse_date_since(github_config.date_since)
+        if date_since:
+            console.print(f"[dim]Filtering data since: {date_since}[/dim]")
+
+    # Get per-category limits
+    items_per_repo = github_config.items_per_repo if github_config else GitHubItemLimitsModel()
+
+    context: dict[str, Any] = {"commits": [], "prs": [], "issues": [], "repos": []}
     headers = {"Authorization": f"Bearer {gh_token}"}
 
     try:
-        # Get user's repos
-        repos = get_user_repos(gh_token, max_repos=limit)
+        # Get user's repos with selection mode
+        repo_selection = github_config.repos if github_config else None
+        repos = get_user_repos(gh_token, max_repos=limit, repo_selection=repo_selection)
         if not repos:
             logger.warning("No user repos found, skipping GitHub context")
             return None
@@ -1816,17 +1960,59 @@ def get_github_context(
             try:
                 logger.debug(f"  [{repo_idx}/{len(repos)}] Processing {repo}...")
 
+                # Fetch repo metadata if enabled
+                repo_metadata = None
+                if github_config and github_config.include_repo_metadata:
+                    repo_response = httpx.get(
+                        f"https://api.github.com/repos/{repo}",
+                        headers=headers,
+                        timeout=10,
+                    )
+                    if repo_response.status_code == 200:
+                        repo_data = repo_response.json()
+                        repo_metadata = {
+                            "name": repo,
+                            "description": repo_data.get("description"),
+                            "language": repo_data.get("language"),
+                            "topics": repo_data.get("topics", []),
+                            "stars": repo_data.get("stargazers_count", 0),
+                            "forks": repo_data.get("forks_count", 0),
+                        }
+                        context["repos"].append(repo_metadata)
+                        logger.debug(
+                            f"    ✓ Repo metadata: {repo_metadata['language']}, "
+                            f"{repo_metadata['stars']} stars"
+                        )
+
                 # Get recent commits
                 if include_commits:
+                    commit_params = {"per_page": items_per_repo.commits}
+                    if date_since:
+                        commit_params["since"] = date_since
+                    if authors:
+                        # GitHub API uses 'author' parameter for commit filtering
+                        commit_params["author"] = authors[0] if len(authors) == 1 else None
+
                     response = httpx.get(
                         f"https://api.github.com/repos/{repo}/commits",
                         headers=headers,
-                        params={"per_page": 5},
+                        params=commit_params,
                         timeout=10,
                     )
                     if response.status_code == 200:
                         commits = response.json()
-                        fetched = len(commits[:3])
+                        # Filter by multiple authors if needed (API only supports one)
+                        if len(authors) > 1:
+                            commits = [
+                                c
+                                for c in commits
+                                if c.get("commit", {})
+                                .get("author", {})
+                                .get("name")
+                                in authors
+                                or c.get("author", {}).get("login") in authors
+                            ]
+                        fetched = len(commits)
                         context["commits"].extend(
                             [
                                 {
@@ -1846,15 +2032,38 @@ def get_github_context(
 
                 # Get recent PRs
                 if include_prs:
+                    pr_params: dict[str, Any] = {
+                        "state": github_config.pr_state if github_config else "all",
+                        "per_page": items_per_repo.prs,
+                    }
+                    if date_since:
+                        # GitHub doesn't support since for PRs directly, filter client-side
+                        pr_params["sort"] = "updated"
+                        pr_params["direction"] = "desc"
+
                     response = httpx.get(
                         f"https://api.github.com/repos/{repo}/pulls",
                         headers=headers,
-                        params={"state": "all", "per_page": 5},
+                        params=pr_params,
                         timeout=10,
                     )
                     if response.status_code == 200:
                         prs = response.json()
-                        fetched = len(prs[:3])
+                        # Filter by authors if specified
+                        if authors:
+                            prs = [
+                                pr
+                                for pr in prs
+                                if pr.get("user", {}).get("login") in authors
+                            ]
+                        # Filter by date if specified
+                        if date_since:
+                            prs = [
+                                pr
+                                for pr in prs
+                                if pr.get("updated_at", "") >= date_since
+                            ]
+                        fetched = len(prs)
                         context["prs"].extend(
                             [
                                 {
@@ -1864,8 +2073,10 @@ def get_github_context(
                                     "repo": repo,
                                     "url": pr.get("html_url", ""),
                                     "author": pr.get("user", {}).get("login", "Unknown"),
+                                    "created_at": pr.get("created_at", ""),
+                                    "updated_at": pr.get("updated_at", ""),
                                 }
-                                for pr in prs[:3]
+                                for pr in prs
                             ]
                         )
                         logger.debug(f"    ✓ Fetched {fetched} PRs")
@@ -1874,15 +2085,32 @@ def get_github_context(
 
                 # Get recent issues
                 if include_issues:
+                    issue_params: dict[str, Any] = {
+                        "state": github_config.issue_state if github_config else "all",
+                        "per_page": items_per_repo.issues,
+                    }
+                    if date_since:
+                        issue_params["since"] = date_since
+                    # GitHub issues API supports 'creator' parameter for author filtering
+                    if authors and len(authors) == 1:
+                        issue_params["creator"] = authors[0]
+
                     response = httpx.get(
                         f"https://api.github.com/repos/{repo}/issues",
                         headers=headers,
-                        params={"state": "all", "per_page": 5},
+                        params=issue_params,
                         timeout=10,
                     )
                     if response.status_code == 200:
                         issues = response.json()
-                        issues_filtered = [i for i in issues[:3] if not i.get("pull_request")]
+                        # Filter out PRs and apply multi-author filter if needed
+                        issues_filtered = [i for i in issues if not i.get("pull_request")]
+                        if len(authors) > 1:
+                            issues_filtered = [
+                                i
+                                for i in issues_filtered
+                                if i.get("user", {}).get("login") in authors
+                            ]
                         fetched = len(issues_filtered)
                         context["issues"].extend(
                             [
@@ -1894,6 +2122,8 @@ def get_github_context(
                                     "labels": [
                                         label.get("name", "") for label in i.get("labels", [])
                                     ],
+                                    "state": i.get("state", ""),
+                                    "author": i.get("user", {}).get("login", "Unknown"),
                                 }
                                 for i in issues_filtered
                             ]
@@ -1909,16 +2139,23 @@ def get_github_context(
                 logger.error(f"  Error fetching data from {repo}: {type(e).__name__}: {e}")
                 continue
 
-        # Trim to reasonable sizes
-        context["commits"] = context["commits"][:5]
-        context["prs"] = context["prs"][:5]
-        context["issues"] = context["issues"][:5]
+        # Keep all fetched items (already limited by per_repo settings)
+        summary_parts = []
+        if context["commits"]:
+            summary_parts.append(f"{len(context['commits'])} commits")
+        if context["prs"]:
+            summary_parts.append(f"{len(context['prs'])} PRs")
+        if context["issues"]:
+            summary_parts.append(f"{len(context['issues'])} issues")
+        if context["repos"]:
+            summary_parts.append(f"{len(context['repos'])} repo metadata")
 
-        logger.info(
-            f"✓ GitHub context loaded: {len(context['commits'])} commits, "
-            f"{len(context['prs'])} PRs, {len(context['issues'])} issues"
+        logger.info(f"✓ GitHub context loaded: {', '.join(summary_parts)}")
+        return (
+            context
+            if context["commits"] or context["prs"] or context["issues"] or context["repos"]
+            else None
         )
-        return context if context["commits"] or context["prs"] or context["issues"] else None
 
     except Exception as e:
         logger.error(f"Error fetching GitHub context: {type(e).__name__}: {e}")
@@ -1968,6 +2205,19 @@ def generate_messages_with_ai(
 
     if github_context:
         context_str = "\n\n## REAL PROJECT CONTEXT (USE THIS!)\nYou have access to real GitHub data from the user's repos. HEAVILY reference this in your messages:\n"
+
+        # Include repository metadata if available
+        if github_context.get("repos"):
+            context_str += "\n### Repositories (background info):\n"
+            for repo in github_context["repos"]:
+                lang = repo.get("language") or "Unknown"
+                stars = repo.get("stars", 0)
+                topics = ", ".join(repo.get("topics", [])[:3]) or "no topics"
+                desc = repo.get("description") or "No description"
+                context_str += (
+                    f"- *{repo['name']}*: {desc} ({lang}, {stars} ⭐, topics: {topics})\n"
+                )
+
         if github_context.get("commits"):
             context_str += "\n### Recent Commits (reference these!):\n"
             for c in github_context["commits"][:5]:
@@ -1976,15 +2226,17 @@ def generate_messages_with_ai(
             context_str += "\n### Open/Recent PRs (discuss, review, question these!):\n"
             for pr in github_context["prs"][:5]:
                 url = pr.get("url", "")
+                state_icon = "🟢" if pr["state"] == "open" else "🟣"
                 context_str += (
-                    f"- <{url}|#{pr['number']}: {pr['title']}> ({pr['state']}) by @{pr['author']}\n"
+                    f"- {state_icon} <{url}|#{pr['number']}: {pr['title']}> ({pr['state']}) by @{pr['author']}\n"
                 )
         if github_context.get("issues"):
             context_str += "\n### Issues (ask about, update, close these!):\n"
             for issue in github_context["issues"][:5]:
                 url = issue.get("url", "")
                 labels = ", ".join(issue["labels"]) if issue["labels"] else "no labels"
-                context_str += f"- <{url}|#{issue['number']}: {issue['title']}> [{labels}]\n"
+                state_icon = "🔴" if issue.get("state") == "open" else "✅"
+                context_str += f"- {state_icon} <{url}|#{issue['number']}: {issue['title']}> [{labels}] by @{issue.get('author', 'unknown')}\n"
 
         context_str += "\n### How to use this context:\n"
         context_str += "- Reference ACTUAL PR numbers and URLs from above\n"
@@ -1996,6 +2248,7 @@ def generate_messages_with_ai(
         context_str += "- Ask about specific code changes from PRs\n"
         context_str += "- Discuss merge conflicts, review comments, CI failures on these PRs\n"
         context_str += "- Create realistic support threads around this actual project context\n"
+        context_str += "- Reference repository languages and topics when relevant\n"
 
         prompt = base_prompt + "\n\n" + context_str
         logger.debug("AI prompt includes GitHub context")
@@ -2515,21 +2768,29 @@ def main() -> None:
         github_token = args.github_token
         github_limit = args.github_limit
 
+        # Get full GitHub config (prefer ai.github, fallback to top-level github)
+        github_config = None
+        if unified_config_obj:
+            if unified_config_obj.ai and unified_config_obj.ai.github:
+                github_config = unified_config_obj.ai.github
+            elif unified_config_obj.github:
+                github_config = unified_config_obj.github
+
         # Override with config values if present (config takes precedence unless CLI explicitly set)
-        if unified_config_obj and unified_config_obj.ai and unified_config_obj.ai.github:
-            gh_cfg = unified_config_obj.ai.github
-            if not args.use_github and gh_cfg.enabled:
+        if github_config:
+            if not args.use_github and github_config.enabled:
                 use_github = True
-            if not args.github_token and gh_cfg.token:
-                github_token = gh_cfg.token
-            if args.github_limit == 5 and gh_cfg.limit != 5:
-                github_limit = gh_cfg.limit
+            if not args.github_token and github_config.token:
+                github_token = github_config.token
+            if args.github_limit == 5 and github_config.limit != 5:
+                github_limit = github_config.limit
 
         github_context = get_github_context(
             env,
             enabled=use_github,
             token=github_token,
             limit=github_limit,
+            github_config=github_config,
         )
         ai_config = unified_config_obj.ai if unified_config_obj else None
         messages = generate_messages_with_ai(env, ai_config, github_context)
