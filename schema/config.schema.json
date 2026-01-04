@@ -1,0 +1,259 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://raw.githubusercontent.com/echohello-dev/yap-on-slack/main/schema/config.schema.json",
+    "title": "Yap on Slack Configuration",
+    "description": "Unified configuration for yap-on-slack tool",
+    "type": "object",
+    "required": [
+        "workspace"
+    ],
+    "properties": {
+        "workspace": {
+            "type": "object",
+            "description": "Slack workspace settings (required)",
+            "required": [
+                "org_url",
+                "channel_id",
+                "team_id"
+            ],
+            "properties": {
+                "org_url": {
+                    "type": "string",
+                    "description": "Slack workspace URL (e.g., https://your-workspace.slack.com)",
+                    "pattern": "^https://.+\\.slack\\.com$",
+                    "examples": [
+                        "https://your-workspace.slack.com"
+                    ]
+                },
+                "channel_id": {
+                    "type": "string",
+                    "description": "Target channel ID (e.g., C0123456789)",
+                    "pattern": "^C[A-Z0-9]{10,}$",
+                    "examples": [
+                        "C0123456789"
+                    ]
+                },
+                "team_id": {
+                    "type": "string",
+                    "description": "Workspace team ID (e.g., T0123456789)",
+                    "pattern": "^T[A-Z0-9]{10,}$",
+                    "examples": [
+                        "T0123456789"
+                    ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "credentials": {
+            "type": "object",
+            "description": "Default Slack session credentials (used when no per-user tokens defined)",
+            "properties": {
+                "xoxc_token": {
+                    "type": "string",
+                    "description": "Slack xoxc session token (extract from browser dev tools)",
+                    "pattern": "^xoxc-.+",
+                    "examples": [
+                        "xoxc-your-token-here"
+                    ]
+                },
+                "xoxd_token": {
+                    "type": "string",
+                    "description": "Slack xoxd session token (extract from browser dev tools)",
+                    "examples": [
+                        "xoxd-your-token-here"
+                    ]
+                },
+                "cookies": {
+                    "type": "string",
+                    "description": "Optional extra Slack cookies (semi-colon separated)",
+                    "examples": [
+                        "d-s=1234567890; x=xoxd-1234567890"
+                    ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "user_strategy": {
+            "type": "string",
+            "description": "User selection strategy for multi-user posting",
+            "enum": [
+                "round_robin",
+                "random"
+            ],
+            "default": "round_robin"
+        },
+        "users": {
+            "type": "array",
+            "description": "Additional users for multi-user posting (optional, merged with default credentials user)",
+            "items": {
+                "type": "object",
+                "required": [
+                    "name",
+                    "xoxc_token",
+                    "xoxd_token"
+                ],
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "User identifier (used for assigning messages)",
+                        "examples": [
+                            "alice",
+                            "bob",
+                            "charlie"
+                        ]
+                    },
+                    "xoxc_token": {
+                        "type": "string",
+                        "description": "Slack xoxc session token for this user",
+                        "pattern": "^xoxc-.+",
+                        "examples": [
+                            "xoxc-alice-token"
+                        ]
+                    },
+                    "xoxd_token": {
+                        "type": "string",
+                        "description": "Slack xoxd session token for this user",
+                        "examples": [
+                            "xoxd-alice-token"
+                        ]
+                    },
+                    "cookies": {
+                        "type": "string",
+                        "description": "Optional extra Slack cookies for this user",
+                        "examples": [
+                            "d-s=1234567890"
+                        ]
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        "messages": {
+            "type": "array",
+            "description": "Messages to post (optional, can also use --use-ai to generate)",
+            "items": {
+                "type": "object",
+                "required": [
+                    "text"
+                ],
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Message text with Slack formatting (markdown-like syntax)",
+                        "examples": [
+                            "Good morning team! :wave:",
+                            "**Important**: Deploy scheduled for 2pm PST"
+                        ]
+                    },
+                    "user": {
+                        "type": "string",
+                        "description": "User name to post as (defaults to round_robin/random selection)",
+                        "examples": [
+                            "alice",
+                            "bob"
+                        ]
+                    },
+                    "replies": {
+                        "type": "array",
+                        "description": "Thread replies to this message",
+                        "items": {
+                            "oneOf": [
+                                {
+                                    "type": "string",
+                                    "description": "Reply text (uses default user selection)"
+                                },
+                                {
+                                    "type": "object",
+                                    "required": [
+                                        "text"
+                                    ],
+                                    "properties": {
+                                        "text": {
+                                            "type": "string",
+                                            "description": "Reply text"
+                                        },
+                                        "user": {
+                                            "type": "string",
+                                            "description": "User name for this reply"
+                                        }
+                                    },
+                                    "additionalProperties": false
+                                }
+                            ]
+                        }
+                    },
+                    "reactions": {
+                        "type": "array",
+                        "description": "Emoji reactions to add (without colons)",
+                        "items": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9_+-]+$",
+                            "examples": [
+                                "wave",
+                                "coffee",
+                                "rocket",
+                                "eyes"
+                            ]
+                        }
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        "ai": {
+            "type": "object",
+            "description": "AI message generation settings",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable AI message generation",
+                    "default": false
+                },
+                "model": {
+                    "type": "string",
+                    "description": "OpenRouter model to use for generation (openrouter/auto recommended). See top weekly models: https://openrouter.ai/models?order=top-weekly",
+                    "default": "openrouter/auto",
+                    "examples": [
+                        "openrouter/auto",
+                        "google/gemini-2.5-flash",
+                        "deepseek/deepseek-v3.2",
+                        "anthropic/claude-sonnet-4.5",
+                        "google/gemini-3-flash-preview",
+                        "x-ai/grok-code-fast-1"
+                    ]
+                },
+                "api_key": {
+                    "type": "string",
+                    "description": "OpenRouter API key (can also use OPENROUTER_API_KEY env var)",
+                    "pattern": "^sk-or-v1-.+",
+                    "examples": [
+                        "sk-or-v1-your-key-here"
+                    ]
+                },
+                "temperature": {
+                    "type": "number",
+                    "description": "Model temperature for generation (0.0-1.0)",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "default": 0.7
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "description": "Maximum tokens for generated response",
+                    "minimum": 100,
+                    "maximum": 10000,
+                    "default": 4000
+                },
+                "system_prompt": {
+                    "type": "string",
+                    "description": "Custom system prompt for AI generation (overrides default). Default prompt: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/post_messages.py#L49",
+                    "examples": [
+                        "Generate realistic engineering team Slack messages about infrastructure issues..."
+                    ]
+                }
+            },
+            "additionalProperties": false
+        }
+    },
+    "additionalProperties": false
+}

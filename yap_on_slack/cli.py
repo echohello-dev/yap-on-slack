@@ -5,150 +5,100 @@ import argparse
 import sys
 from pathlib import Path
 
+from platformdirs import user_config_dir
 from rich.console import Console
 
 from yap_on_slack import __version__
 
 console = Console()
 
-# Template content for .env file
-ENV_TEMPLATE = """\
-# Slack Session Tokens (required)
-# Extract from browser dev tools while logged into Slack
-SLACK_XOXC_TOKEN=xoxc-your-token-here
-SLACK_XOXD_TOKEN=xoxd-your-token-here
-
-# Optional: Default posting user name (used when a message has no "user" field)
-SLACK_USER_NAME=default
-
-# Slack Workspace Configuration (required)
-SLACK_ORG_URL=https://your-workspace.slack.com
-SLACK_CHANNEL_ID=C1234567890
-SLACK_TEAM_ID=T1234567890
-
-# Optional: Multi-user sessions
-# If ./users.yaml (or ./users.yml) exists, it is loaded automatically.
-# You can also explicitly point to a file:
-# SLACK_USERS_FILE=users.yaml
-
-# Optional: AI Message Generation
-# Get API key from https://openrouter.ai
-OPENROUTER_API_KEY=sk-or-v1-your-key-here
-
-# Optional: GitHub Context Integration
-# Used to fetch real commits, PRs, and issues for more realistic messages
-# Falls back to 'gh auth token' if not set
-GITHUB_TOKEN=ghp_your-token-here
-"""
-
-# Template content for users.yaml file
-USERS_YAML_TEMPLATE = """\
-# Multi-user Slack sessions used for posting messages
-# - strategy: round_robin | random
-# - default_user: optional user name to prefer
-
-strategy: round_robin
-default_user: default
-
-users:
-  - name: alice
-    SLACK_XOXC_TOKEN: xoxc-...
-    SLACK_XOXD_TOKEN: xoxd-...
-
-  - name: bob
-    SLACK_XOXC_TOKEN: xoxc-...
-    SLACK_XOXD_TOKEN: xoxd-...
-"""
-
-# Template content for messages.json file
-MESSAGES_JSON_TEMPLATE = """\
-[
-  {
-    "text": "Hey team, I'm getting a *403* on the new dashboard. Has anyone else seen this? :thinking_face:",
-    "user": "alice",
-    "replies": [
-      {"text": "Did you check if your token has the right scope?", "user": "bob"},
-      "Also check the URL path - easy typo to make"
-    ]
-  },
-  {
-    "text": "Quick question - what's our _data retention policy_ for logs?",
-    "replies": [
-      "90 days in hot storage, then 7 years in cold per policy"
-    ]
-  },
-  {
-    "text": "*Issue* in prod :bug:: Database timeout on user auth\\n\\`TypeError: Cannot read property 'userId' of undefined\\`\\nAnyone know what we deployed?",
-    "replies": [
-      "Did we change the auth middleware recently?",
-      "Yeah, I see it now. JWT decode is failing. Let me push a fix"
-    ]
-  },
-  {
-    "text": ":rocket: *heads up* - deploying _auth service v2.1_ to staging in 30min",
-    "replies": [
-      "thanks for the heads up! when's prod?",
-      "probably friday if no issues"
-    ]
-  },
-  {
-    "text": ":warning: *ATTENTION*: deprecating \\`/api/v1/users\\` endpoint _next month_. migrate to \\`/api/v2/users\\` asap",
-    "replies": [
-      "how long do we have?",
-      "until feb 15. best to do it early"
-    ]
-  }
-]
-"""
-
 
 def cmd_init(args: argparse.Namespace) -> int:
-    """Initialize configuration files for yap-on-slack."""
-    cwd = Path.cwd()
-    created_files: list[str] = []
-    skipped_files: list[str] = []
-
-    # Create .env file
-    env_file = cwd / ".env"
-    if env_file.exists() and not args.force:
-        skipped_files.append(".env (already exists, use --force to overwrite)")
+    """Initialize configuration file for yap-on-slack."""
+    # Determine target directory
+    if args.local:
+        config_dir = Path.cwd()
+        config_file = config_dir / "config.yaml"
     else:
-        env_file.write_text(ENV_TEMPLATE)
-        created_files.append(".env")
+        config_dir = Path(user_config_dir("yap-on-slack", ensure_exists=False))
+        config_file = config_dir / "config.yaml"
 
-    # Create users.yaml file
-    users_file = cwd / "users.yaml"
-    if users_file.exists() and not args.force:
-        skipped_files.append("users.yaml (already exists, use --force to overwrite)")
-    else:
-        users_file.write_text(USERS_YAML_TEMPLATE)
-        created_files.append("users.yaml")
+    # Create directory if needed
+    config_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create messages.json file
-    messages_file = cwd / "messages.json"
-    if messages_file.exists() and not args.force:
-        skipped_files.append("messages.json (already exists, use --force to overwrite)")
+    # Check if file already exists
+    if config_file.exists() and not args.force:
+        console.print(f"\n[bold yellow]⚠ Config file already exists:[/bold yellow] {config_file}")
+        console.print("  Use [bold]--force[/bold] to overwrite")
+        return 1
+
+    # Read template from config.yaml.example
+    template_path = Path(__file__).parent.parent / "config.yaml.example"
+    if template_path.exists():
+        template_content = template_path.read_text()
     else:
-        messages_file.write_text(MESSAGES_JSON_TEMPLATE)
-        created_files.append("messages.json")
+        # Fallback inline template if example file not found
+        template_content = """\
+# yaml-language-server: $schema=https://raw.githubusercontent.com/echohello-dev/yap-on-slack/main/schema/config.schema.json
+# Yap on Slack Configuration
+
+# Workspace settings (required)
+workspace:
+  org_url: https://your-workspace.slack.com
+  channel_id: C0123456789
+  team_id: T0123456789
+
+# Default credentials (required)
+credentials:
+  xoxc_token: xoxc-your-token-here
+  xoxd_token: xoxd-your-token-here
+  cookies: ""
+
+# User selection strategy
+user_strategy: round_robin  # round_robin | random
+
+# Additional users (optional)
+# users:
+#   - name: alice
+#     xoxc_token: xoxc-alice-token
+#     xoxd_token: xoxd-alice-token
+#   - name: bob
+#     xoxc_token: xoxc-bob-token
+#     xoxd_token: xoxd-bob-token
+
+# AI settings (optional)
+ai:
+  enabled: false
+  model: openrouter/auto              # Auto-selects best model (recommended)
+  # See top weekly models: https://openrouter.ai/models?order=top-weekly
+  api_key: ""
+  temperature: 0.7
+  max_tokens: 4000
+  # system_prompt: |                  # Optional: override default prompt
+  #   Your custom prompt here
+  # Default: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/post_messages.py#L49
+  temperature: 0.7
+  max_tokens: 4000
+"""
+
+    # Write config file
+    config_file.write_text(template_content)
 
     # Print results
     console.print("\n[bold blue]━━━ Yap on Slack Init ━━━[/bold blue]\n")
-
-    if created_files:
-        console.print("[bold green]✓ Created configuration files:[/bold green]")
-        for f in created_files:
-            console.print(f"  [green]• {f}[/green]")
-
-    if skipped_files:
-        console.print("\n[bold yellow]⚠ Skipped files:[/bold yellow]")
-        for f in skipped_files:
-            console.print(f"  [yellow]• {f}[/yellow]")
+    console.print(f"[bold green]✓ Created config file:[/bold green] {config_file}")
 
     console.print("\n[bold cyan]Next steps:[/bold cyan]")
-    console.print("  1. Edit [bold].env[/bold] with your Slack credentials")
-    console.print("     - Get SLACK_XOXC_TOKEN and SLACK_XOXD_TOKEN from browser dev tools")
-    console.print("     - Set SLACK_ORG_URL, SLACK_CHANNEL_ID, and SLACK_TEAM_ID")
+    console.print(f"  1. Edit [bold]{config_file}[/bold]")
+    console.print("  2. Set workspace settings (org_url, channel_id, team_id)")
+    console.print("  3. Set credentials (xoxc_token, xoxd_token)")
+    console.print("     - Extract from browser dev tools while logged into Slack")
+    console.print("  4. (Optional) Add more users for multi-user posting")
+    console.print("  5. (Optional) Configure AI generation settings")
+    console.print("  6. Run: [bold cyan]yos run[/bold cyan]")
+    console.print()
+
+    return 0
     console.print("  2. (Optional) Edit [bold]users.yaml[/bold] for multi-user posting")
     console.print("  3. (Optional) Edit [bold]messages.json[/bold] with custom messages")
     console.print("  4. Run: [bold cyan]yos run[/bold cyan] (or yaponslack run)")
@@ -165,6 +115,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Build sys.argv for the existing parser
     new_argv = ["yap-on-slack"]
 
+    if args.config:
+        new_argv.extend(["--config", str(args.config)])
     if args.messages:
         new_argv.extend(["--messages", str(args.messages)])
     if args.users:
@@ -242,10 +194,16 @@ Commands can also be invoked as:
     # Init command
     init_parser = subparsers.add_parser(
         "init",
-        help="Initialize configuration files (.env, users.yaml, messages.json)",
-        description="Create configuration files needed to run yap-on-slack",
+        help="Initialize config.yaml file",
+        description="Create config.yaml with default settings",
     )
-    init_parser.add_argument("--force", "-f", action="store_true", help="Overwrite existing files")
+    init_parser.add_argument("--force", "-f", action="store_true", help="Overwrite existing file")
+    init_parser.add_argument(
+        "--local",
+        "-l",
+        action="store_true",
+        help="Create config.yaml in current directory (default: ~/.config/yap-on-slack/)",
+    )
     init_parser.set_defaults(func=cmd_init)
 
     # Run command
@@ -253,6 +211,11 @@ Commands can also be invoked as:
         "run",
         help="Post messages to Slack",
         description="Post realistic support messages to Slack using session tokens",
+    )
+    run_parser.add_argument(
+        "--config",
+        type=Path,
+        help="Path to config.yaml file (default: ./config.yaml or ~/.config/yap-on-slack/config.yaml)",
     )
     run_parser.add_argument(
         "--messages",
@@ -306,7 +269,7 @@ Commands can also be invoked as:
     run_parser.add_argument(
         "--use-ai",
         action="store_true",
-        help="Generate messages using OpenRouter Gemini 3 Flash (requires OPENROUTER_API_KEY)",
+        help="Generate messages using OpenRouter (auto-selects best model, requires OPENROUTER_API_KEY)",
     )
     run_parser.add_argument(
         "--debug-auth",

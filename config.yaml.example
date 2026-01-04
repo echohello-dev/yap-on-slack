@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/echohello-dev/yap-on-slack/main/schema/config.schema.json
+# Yap on Slack Configuration
+# Save as: ~/.config/yap-on-slack/config.yaml (default) or ./config.yaml (local override)
+
+# Workspace settings (required)
+workspace:
+  org_url: https://your-workspace.slack.com  # Your Slack workspace URL
+  channel_id: C0123456789                    # Target channel ID (find in channel details)
+  team_id: T0123456789                       # Workspace team ID (find in workspace settings)
+
+# Default credentials (required if not using users array)
+# Extract tokens from browser dev tools while logged into Slack
+credentials:
+  xoxc_token: xoxc-your-token-here  # Session token (starts with xoxc-)
+  xoxd_token: xoxd-your-token-here  # Session cookie (starts with xoxd-)
+  cookies: ""                        # Optional: extra cookies (semi-colon separated)
+
+# User selection strategy for multi-user posting
+user_strategy: round_robin  # Options: round_robin | random
+
+# Additional users (optional, merged with default credentials user)
+# Uncomment to enable multi-user posting:
+# users:
+#   - name: alice
+#     xoxc_token: xoxc-alice-token
+#     xoxd_token: xoxd-alice-token
+#   - name: bob
+#     xoxc_token: xoxc-bob-token
+#     xoxd_token: xoxd-bob-token
+
+# Messages to post (optional, can also use --use-ai to generate)
+# Uncomment to define custom messages:
+# messages:
+#   - text: "Good morning team! :wave:"
+#     user: alice  # Optional: specify which user posts this message
+#     replies:
+#       - "Hey! Ready for standup?"
+#       - text: "Morning everyone"
+#         user: bob  # Optional: specify user for this reply
+#     reactions:
+#       - wave
+#       - coffee
+#
+#   - text: "*Important*: Deploy scheduled for 2pm PST :rocket:"
+#     replies:
+#       - "Thanks for the heads up!"
+#     reactions:
+#       - rocket
+#       - eyes
+
+# AI message generation settings
+ai:
+  enabled: false                              # Set to true to enable AI generation
+  model: openrouter/auto                      # Auto-selects best model (recommended)
+  # See top weekly models: https://openrouter.ai/models?order=top-weekly
+  api_key: ""                                 # Or use OPENROUTER_API_KEY env var
+  temperature: 0.7                            # Model temperature (0.0-1.0)
+  max_tokens: 4000                            # Max tokens for generation
+  # system_prompt: |                          # Optional: custom prompt (overrides default)
+  #   Generate realistic Slack messages for testing...
+  # Default system prompt: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/post_messages.py#L49
+
+# Note: Environment variables take precedence over config file values:
+# - SLACK_XOXC_TOKEN, SLACK_XOXD_TOKEN override credentials
+# - SLACK_ORG_URL, SLACK_CHANNEL_ID, SLACK_TEAM_ID override workspace
+# - OPENROUTER_API_KEY overrides ai.api_key

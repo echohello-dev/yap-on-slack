@@ -9,8 +9,9 @@ Simulate realistic Slack messages in channels for testing purposes. Python CLI t
 Python CLI tool with:
 - **yap_on_slack/cli.py** — CLI entry point (`yos`, `yaponslack`, `yap-on-slack`)
 - **yap_on_slack/post_messages.py** — Core message posting logic
-- **messages.json** (optional) — Custom message definitions
-- **.env** — Slack credentials and configuration
+- **config.yaml** — Unified configuration file (workspace, credentials, users, messages, AI settings)
+- **schema/config.schema.json** — JSON Schema for config validation
+- **config.yaml.example** — Configuration template
 
 ## Installation
 
@@ -33,7 +34,8 @@ mise run install
 **CLI commands** (after installation):
 
 ```bash
-yos init            # Create config files (.env, users.yaml, messages.json)
+yos init            # Create config.yaml in ~/.config/yap-on-slack/ (default)
+yos init --local    # Create config.yaml in current directory
 yos run             # Post messages to Slack
 yos run --dry-run   # Validate without posting
 yos run --use-ai    # Generate AI messages
@@ -53,12 +55,81 @@ mise run build      # Build Docker image
 
 ## Configuration
 
-**Required environment variables** (in `.env`):
-- `SLACK_XOXC_TOKEN` — Slack session token (xoxc-...)
-- `SLACK_XOXD_TOKEN` — Slack session token (xoxd-...)
-- `SLACK_ORG_URL` — Workspace URL (https://workspace.slack.com)
-- `SLACK_CHANNEL_ID` — Target channel ID
-- `SLACK_TEAM_ID` — Workspace team ID
+**Primary configuration file**: `config.yaml`
+
+Config file discovery order:
+1. `--config` flag (explicit path)
+2. `./config.yaml` (current directory)
+3. `~/.config/yap-on-slack/config.yaml` (XDG home directory)
+
+**Config file structure**:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/echohello-dev/yap-on-slack/main/schema/config.schema.json
+
+# Workspace settings (required)
+workspace:
+  org_url: https://your-workspace.slack.com
+  channel_id: C0123456789
+  team_id: T0123456789
+
+# Default credentials (required if no users array)
+credentials:
+  xoxc_token: xoxc-your-token-here
+  xoxd_token: xoxd-your-token-here
+  cookies: ""  # optional
+
+# User selection strategy
+user_strategy: round_robin  # round_robin | random
+
+# Additional users (optional)
+users:
+  - name: alice
+    xoxc_token: xoxc-alice-token
+    xoxd_token: xoxd-alice-token
+  - name: bob
+    xoxc_token: xoxc-bob-token
+    xoxd_token: xoxd-bob-token
+
+# Messages to post (optional, can also use --use-ai)
+messages:
+  - text: "Good morning team! :wave:"
+    user: alice  # optional
+    replies:
+      - "Hey! Ready for standup?"
+      - text: "Morning everyone"
+        user: bob
+    reactions:
+      - wave
+      - coffee
+
+# AI message generation
+ai:
+  enabled: false
+  model: openrouter/auto  # Auto-selects best model (recommended)
+  # See top weekly models: https://openrouter.ai/models?order=top-weekly
+  api_key: ""  # or use OPENROUTER_API_KEY env var
+  temperature: 0.7
+  max_tokens: 4000
+  # system_prompt: |  # Optional: custom prompt (overrides default)
+  #   Generate realistic Slack messages...
+  # Default prompt: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/post_messages.py#L49
+  temperature: 0.7
+  max_tokens: 4000
+  system_prompt: |  # optional custom prompt
+    Generate realistic Slack messages...
+```
+
+**Environment variables** (override config file):
+- `SLACK_XOXC_TOKEN` — Session token (overrides credentials.xoxc_token)
+- `SLACK_XOXD_TOKEN` — Session token (overrides credentials.xoxd_token)
+- `SLACK_ORG_URL` — Workspace URL (overrides workspace.org_url)
+- `SLACK_CHANNEL_ID` — Channel ID (overrides workspace.channel_id)
+- `SLACK_TEAM_ID` — Team ID (overrides workspace.team_id)
+- `OPENROUTER_API_KEY` — AI API key (overrides ai.api_key)
+- `GITHUB_TOKEN` — GitHub token for context (optional)
+
+**Legacy support**: `.env` files in the config directory are still loaded and merged with config.yaml. Environment variables take precedence.
 
 ## Message Format
 
@@ -71,22 +142,21 @@ Messages support markdown-like formatting:
 - `:emoji_name:` — Emoji (e.g., :rocket:, :warning:)
 - `•` or `- ` — Bullet points
 
-**Custom messages**: Create `messages.json` with array of message objects:
-```json
-[
-  {
-    "text": "Main message with *formatting*",
-    "replies": ["First reply", "Second reply"]
-  }
-]
-```
+Messages can be defined in:
+1. **config.yaml** `messages:` array
+2. **Custom JSON file** via `--messages` flag
+3. **AI generation** via `--use-ai` flag
+4. **Default fallback messages** (built-in)
 
 ## Tech Stack
 
 - **Python 3.13** — Latest Python version
 - **httpx** — Async HTTP client for Slack API
+- **pydantic** — Configuration validation
+- **platformdirs** — Cross-platform config directory resolution
 - **rich** — Terminal UI with progress bars
 - **python-dotenv** — Environment configuration
+- **pyaml** — YAML configuration parsing
 - **ruff** — Fast linting and formatting
 
 ## Docker
@@ -94,15 +164,15 @@ Messages support markdown-like formatting:
 Build and run in container:
 ```bash
 docker build -t yap-on-slack .
-docker run --rm --env-file .env yap-on-slack
+docker run --rm -v ~/.config/yap-on-slack:/config -e CONFIG_PATH=/config/config.yaml yap-on-slack
 ```
 
 Published to GHCR: `ghcr.io/echohello-dev/yap-on-slack:latest`
 
 ## Development
 
-1. Run `yos init` to create config files (or copy `.env.example` to `.env`)
-2. Edit `.env` and add credentials
+1. Run `yos init` to create config.yaml (or `yos init --local` for CWD)
+2. Edit config file and add workspace settings + credentials
 3. Run `mise run install` to install dependencies (from source)
 4. Run `yos run` or `mise run run` to post messages
 5. Use `mise run lint` before committing

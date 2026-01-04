@@ -7,9 +7,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from yap_on_slack.post_messages import (AppConfig, SlackUser, SlackWorkspace,
-                                        _assign_users_to_ai_messages,
-                                        load_config, load_messages)
+from yap_on_slack.post_messages import (
+    AppConfig,
+    SlackUser,
+    SlackWorkspace,
+    _assign_users_to_ai_messages,
+    load_config,
+    load_messages,
+)
 
 
 class TestLoadConfig:
@@ -172,7 +177,8 @@ users:
             assert isinstance(messages[0]["replies"], list)
             # Note: replies may be randomly sampled (0-8), so check if present
             if messages[0]["replies"]:
-                assert messages[0]["replies"][0]["text"] == "r1"
+                # Check that reply text is one of the original replies
+                assert messages[0]["replies"][0]["text"] in {"r1", "r2"}
                 assert messages[0]["replies"][0]["user"] in {"env", "alice"}
 
         def test_randomizes_reply_count_between_0_and_8(self):

@@ -17,6 +17,7 @@ from urllib.parse import unquote, urlparse
 import httpx
 import yaml
 from dotenv import dotenv_values
+from platformdirs import user_config_dir
 from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
@@ -39,6 +40,82 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# Default AI system prompt
+DEFAULT_AI_SYSTEM_PROMPT = """Generate 20 realistic Slack channel messages for an engineering team support channel.
+
+## CRITICAL: Tone and Length Variety
+Messages MUST vary dramatically in tone and length:
+
+**Tone spectrum** (use all of these across messages):
+- Super casual: "yo anyone know why ci is failing lol", "thx!", "lgtm ship it"
+- Casual: "hey quick q - where's the config for...", "np, happy to help"
+- Normal: "I'm seeing an issue with the auth flow. Has anyone encountered this?"
+- Professional: "Team, please be advised that we'll be performing scheduled maintenance..."
+- Formal announcements: "*[ACTION REQUIRED]* All teams must migrate to v2 API by EOQ"
+
+**Length spectrum** (use all of these):
+- One-word/emoji only: ":+1:", "thx", "lgtm", ":eyes:", "noted"
+- Quick one-liners: "anyone else seeing 503s?", "nvm figured it out"
+- Medium (2-3 sentences): Standard questions and updates
+- Detailed (paragraph with bullets/code): Complex issues, announcements, guides
+
+## Message Types to Include
+1. **Quick acknowledgments** (just reactions or 1-2 words)
+2. **General support questions**: "how do I...", "where can I find...", "what's the best way to..."
+3. **GitHub-specific discussions**: PR reviews, commit questions, code changes, merge conflicts
+4. **CI/CD and workflow issues**: Failed actions, build errors, deployment problems
+5. **Incident response**: Outages, errors, postmortems
+6. **Announcements**: Deprecations, releases, maintenance windows
+7. **Casual team chat**: Quick kudos, jokes, offtopic-ish comments
+
+## GitHub Actions / Workflow Errors (include several of these)
+Reference actual workflow failures with realistic error messages:
+- ":x: *Workflow failed*: `build.yml` on `main` - `npm ERR! peer dep issue`"
+- "anyone know why the *deploy-prod* action keeps timing out? been stuck for 3 runs now"
+- ":rotating_light: CI broken on <PR link> - `Error: Process completed with exit code 1`"
+- "the `lint` step is failing with `eslint: command not found` - did someone update the runner?"
+
+## Slack Formatting (use extensively and varied)
+- *bold* for emphasis
+- _italic_ for secondary emphasis or quotes
+- ~strikethrough~ for corrections/outdated info
+- `inline code` for commands, file names, variables
+- Code blocks with triple backticks for multi-line code/logs
+- • bullet points for lists
+- 1. 2. 3. numbered lists for steps
+- > blockquotes for quoting others or logs
+- <https://url.com|link text> for links
+- :emoji_name: for slackmoji (use varied ones: :rocket:, :fire:, :eyes:, :pray:, :100:, :tada:, :thinking_face:, :face_palm:, :sob:, :muscle:, :white_check_mark:, :x:, :warning:, :rotating_light:, :bug:, :hammer_and_wrench:, :ship:, :memo:, :bulb:, :wave:, :coffee:, :thumbsup:, :thumbsdown:, :heart:)
+
+## Reply Patterns
+- Some messages should have NO replies
+- Some should have just ":+1:" or "thx" type replies
+- Some should have back-and-forth debugging conversations
+- Some should have multiple people chiming in with suggestions
+- Include natural typos and casual language in replies
+
+## Examples of Good Variety
+
+CASUAL: "yo :wave: anyone know if the staging db is up? getting connection refused"
+REPLY: "yeah was down for backups, should be back now"
+REPLY: "confirmed, just tested :+1:"
+
+PROFESSIONAL: "*[Scheduled Maintenance Notice]*\\nThe production database cluster will undergo maintenance:\\n• *When*: Saturday 2am-4am PST\\n• *Impact*: Read-only mode for 30 minutes\\n• *Action*: No action required, but avoid large writes during this window\\n\\ncc @oncall"
+
+QUICK: ":eyes:"
+REPLY: "lol"
+
+DETAILED ISSUE:
+":bug: *Bug Report*: User sessions expiring prematurely\\n\\n*Steps to reproduce*:\\n1. Login to dashboard\\n2. Wait 5 minutes (no activity)\\n3. Session expires (should be 30min)\\n\\n*Expected*: 30min timeout\\n*Actual*: ~5min timeout\\n\\n`JWT_EXPIRY` looks correct in config. Anyone seen this before?"
+
+WORKFLOW ERROR:
+":x: `deploy-production` failed on <https://github.com/org/repo/actions/runs/12345|run #456>\\n```\\nError: Container action is not supported on macOS\\n```\\nwhoops, wrong runner matrix :face_palm:"
+
+ONE-LINER: "nvm found it in the docs"
+
+ANNOUNCEMENT: "hey all :mega: quick reminder that `/api/v1/*` endpoints are *deprecated* and will be removed next sprint. please migrate to v2 - docs here: <https://docs.example.com/v2|API v2 Guide>"
+"""
 
 
 class SlackAPIError(Exception):
@@ -126,6 +203,89 @@ def _print_auth_debug(
             border_style="magenta",
         )
     )
+
+
+# Unified Config Models
+
+
+class WorkspaceConfigModel(BaseModel):
+    """Workspace settings from config file."""
+
+    org_url: str
+    channel_id: str
+    team_id: str
+
+    @field_validator("org_url")
+    @classmethod
+    def org_url_is_https(cls, v: str) -> str:
+        if not v.startswith("https://"):
+            raise ValueError("org_url must start with https://")
+        return v
+
+
+class CredentialsConfigModel(BaseModel):
+    """Default credentials from config file."""
+
+    xoxc_token: str | None = None
+    xoxd_token: str | None = None
+    cookies: str | None = None
+
+
+class UserConfigModel(BaseModel):
+    """User configuration with credentials."""
+
+    name: str
+    xoxc_token: str
+    xoxd_token: str
+    cookies: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("User name cannot be empty")
+        return v
+
+
+class MessageReplyConfigModel(BaseModel):
+    """Reply configuration from config file."""
+
+    text: str
+    user: str | None = None
+
+
+class MessageConfigModel(BaseModel):
+    """Message configuration from config file."""
+
+    text: str
+    user: str | None = None
+    replies: list[MessageReplyConfigModel | str] = []
+    reactions: list[str] = []
+
+
+class AIConfigModel(BaseModel):
+    """AI generation settings from config file."""
+
+    enabled: bool = False
+    model: str = "openrouter/auto"  # Auto-selects best available model
+    api_key: str | None = None
+    temperature: float = 0.7
+    max_tokens: int = 4000
+    system_prompt: str | None = None
+
+
+class UnifiedConfig(BaseModel):
+    """Unified configuration from config.yaml."""
+
+    workspace: WorkspaceConfigModel
+    credentials: CredentialsConfigModel | None = None
+    user_strategy: Literal["round_robin", "random"] = "round_robin"
+    users: list[UserConfigModel] = []
+    messages: list[MessageConfigModel] = []
+    ai: AIConfigModel | None = None
+
+
+# Legacy Models (for backward compatibility with messages.json)
 
 
 class MessageReply(BaseModel):
@@ -303,6 +463,221 @@ def _build_slack_cookies(config: dict[str, str]) -> dict[str, str]:
     # Use the token directly - do not URL-decode as Slack expects the original value
     cookies["d"] = config["SLACK_XOXD_TOKEN"]
     return cookies
+
+
+def discover_config_file(explicit_path: Path | None = None) -> Path | None:
+    """Discover config file location.
+
+    Search order:
+    1. Explicit --config path
+    2. ./config.yaml (CWD)
+    3. ~/.config/yap-on-slack/config.yaml (XDG home)
+
+    Args:
+        explicit_path: Optional explicit config path from CLI
+
+    Returns:
+        Path to config file if found, None otherwise
+    """
+    if explicit_path:
+        if explicit_path.exists():
+            logger.debug(f"Using explicit config: {explicit_path}")
+            return explicit_path
+        else:
+            raise ValueError(f"Config file not found: {explicit_path}")
+
+    # Check CWD
+    cwd_config = Path.cwd() / "config.yaml"
+    if cwd_config.exists():
+        logger.debug(f"Found config in CWD: {cwd_config}")
+        return cwd_config
+
+    # Check XDG config dir
+    home_config_dir = Path(user_config_dir("yap-on-slack", ensure_exists=False))
+    home_config = home_config_dir / "config.yaml"
+    if home_config.exists():
+        logger.debug(f"Found config in home: {home_config}")
+        return home_config
+
+    logger.debug("No config.yaml found")
+    return None
+
+
+def load_unified_config(config_path: Path | None = None) -> tuple[AppConfig, dict[str, str]]:
+    """Load unified configuration from config.yaml and .env files.
+
+    Args:
+        config_path: Optional explicit config path
+
+    Returns:
+        (app_config, env) tuple with merged configuration
+    """
+    console.print("[bold blue]━━━ Loading Configuration ━━━[/bold blue]")
+
+    # Discover config file
+    discovered_config = discover_config_file(config_path)
+
+    # Load environment variables from .env in config directory (if present)
+    env: dict[str, str] = {}
+    if discovered_config:
+        config_dir = discovered_config.parent
+        env_file = config_dir / ".env"
+        if env_file.exists():
+            logger.debug(f"Loading .env from {env_file}")
+            raw_env = dotenv_values(env_file)
+            for key, value in raw_env.items():
+                if value is not None:
+                    env[key] = value
+            console.print(f"[green]✓ Loaded .env from {env_file}[/green]")
+    else:
+        # Fallback: try .env in CWD
+        cwd_env = Path.cwd() / ".env"
+        if cwd_env.exists():
+            logger.debug(f"Loading .env from {cwd_env}")
+            raw_env = dotenv_values(cwd_env)
+            for key, value in raw_env.items():
+                if value is not None:
+                    env[key] = value
+            console.print(f"[green]✓ Loaded .env from {cwd_env}[/green]")
+
+    # Merge with OS environment variables (env vars take precedence)
+    for key in [
+        "SLACK_XOXC_TOKEN",
+        "SLACK_XOXD_TOKEN",
+        "SLACK_COOKIES",
+        "SLACK_ORG_URL",
+        "SLACK_CHANNEL_ID",
+        "SLACK_TEAM_ID",
+        "SLACK_USER_NAME",
+        "OPENROUTER_API_KEY",
+        "GITHUB_TOKEN",
+    ]:
+        os_value = os.getenv(key)
+        if os_value:
+            env[key] = os_value
+
+    # Load config.yaml if found
+    unified_config: UnifiedConfig | None = None
+    if discovered_config:
+        try:
+            with discovered_config.open() as f:
+                config_data = yaml.safe_load(f)
+
+            if not isinstance(config_data, dict):
+                raise ValueError("Config file must be a YAML mapping/object")
+
+            unified_config = UnifiedConfig(**config_data)
+            console.print(f"[green]✓ Loaded config from {discovered_config}[/green]")
+        except (yaml.YAMLError, ValidationError, TypeError, ValueError) as e:
+            logger.error(f"Failed to load config.yaml: {e}")
+            raise ValueError(f"Invalid config.yaml: {e}") from e
+
+    # Build workspace config (env vars override config file)
+    workspace_data = {}
+    if unified_config:
+        workspace_data["SLACK_ORG_URL"] = unified_config.workspace.org_url
+        workspace_data["SLACK_CHANNEL_ID"] = unified_config.workspace.channel_id
+        workspace_data["SLACK_TEAM_ID"] = unified_config.workspace.team_id
+
+    # Env vars take precedence
+    workspace_data["SLACK_ORG_URL"] = env.get(
+        "SLACK_ORG_URL", workspace_data.get("SLACK_ORG_URL", "")
+    )
+    workspace_data["SLACK_CHANNEL_ID"] = env.get(
+        "SLACK_CHANNEL_ID", workspace_data.get("SLACK_CHANNEL_ID", "")
+    )
+    workspace_data["SLACK_TEAM_ID"] = env.get(
+        "SLACK_TEAM_ID", workspace_data.get("SLACK_TEAM_ID", "")
+    )
+
+    # Validate workspace config
+    missing_workspace = [
+        key
+        for key in ["SLACK_ORG_URL", "SLACK_CHANNEL_ID", "SLACK_TEAM_ID"]
+        if not workspace_data.get(key)
+    ]
+    if missing_workspace:
+        console.print("[bold red]✗ Missing required workspace configuration:[/bold red]")
+        for var in missing_workspace:
+            console.print(f"  [red]- {var}[/red]")
+        raise ValueError(f"Missing required workspace config: {', '.join(missing_workspace)}")
+
+    workspace = SlackWorkspace(
+        SLACK_ORG_URL=str(workspace_data["SLACK_ORG_URL"]),
+        SLACK_CHANNEL_ID=str(workspace_data["SLACK_CHANNEL_ID"]),
+        SLACK_TEAM_ID=str(workspace_data["SLACK_TEAM_ID"]),
+    )
+
+    # Build users list
+    users: list[SlackUser] = []
+    default_user: str | None = None
+    strategy: Literal["round_robin", "random"] = "round_robin"
+
+    # Get default credentials (env vars take precedence over config file)
+    default_xoxc = env.get("SLACK_XOXC_TOKEN")
+    default_xoxd = env.get("SLACK_XOXD_TOKEN")
+    default_cookies = env.get("SLACK_COOKIES")
+    default_user_name = env.get("SLACK_USER_NAME", "default")
+
+    # If not in env, check config file credentials
+    if unified_config and unified_config.credentials:
+        if not default_xoxc:
+            default_xoxc = unified_config.credentials.xoxc_token
+        if not default_xoxd:
+            default_xoxd = unified_config.credentials.xoxd_token
+        if not default_cookies and unified_config.credentials.cookies:
+            default_cookies = unified_config.credentials.cookies
+
+    # Validate we have default credentials
+    if not default_xoxc or not default_xoxd:
+        console.print("[bold red]✗ Missing required credentials:[/bold red]")
+        if not default_xoxc:
+            console.print("  [red]- SLACK_XOXC_TOKEN or credentials.xoxc_token[/red]")
+        if not default_xoxd:
+            console.print("  [red]- SLACK_XOXD_TOKEN or credentials.xoxd_token[/red]")
+        raise ValueError("Missing required credentials (xoxc_token and xoxd_token)")
+
+    # Add default user
+    users.append(
+        SlackUser(
+            name=default_user_name,
+            SLACK_XOXC_TOKEN=default_xoxc,
+            SLACK_XOXD_TOKEN=default_xoxd,
+            SLACK_COOKIES=default_cookies,
+        )
+    )
+    default_user = default_user_name
+
+    # Add additional users from config file
+    if unified_config and unified_config.users:
+        for user_config in unified_config.users:
+            if user_config.name == default_user_name:
+                raise ValueError(
+                    f"User '{default_user_name}' is defined in both credentials and users array; rename one"
+                )
+            users.append(
+                SlackUser(
+                    name=user_config.name,
+                    SLACK_XOXC_TOKEN=user_config.xoxc_token,
+                    SLACK_XOXD_TOKEN=user_config.xoxd_token,
+                    SLACK_COOKIES=user_config.cookies,
+                )
+            )
+        strategy = unified_config.user_strategy
+
+    app_config = AppConfig(
+        workspace=workspace,
+        users=users,
+        default_user=default_user,
+        strategy=strategy,
+    )
+
+    logger.info(f"Configuration loaded: {len(users)} user{'s' if len(users) != 1 else ''}")
+    console.print(
+        f"[bold green]✓ Configuration ready ({len(users)} user{'s' if len(users) != 1 else ''})[/bold green]\n"
+    )
+
+    return app_config, env
 
 
 def _assign_users_to_ai_messages(app_config: AppConfig, messages: list[dict[str, Any]]) -> None:
@@ -917,99 +1292,45 @@ def get_github_context(config: dict[str, str]) -> dict[str, Any] | None:
 
 
 def generate_messages_with_ai(
-    config: dict[str, str], github_context: dict[str, Any] | None = None
+    config: dict[str, str],
+    ai_config: AIConfigModel | None = None,
+    github_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]] | None:
-    """Generate realistic Slack conversations using OpenRouter Gemini 3 Flash.
+    """Generate realistic Slack conversations using OpenRouter AI.
 
     Args:
-        config: Configuration dictionary with OPENROUTER_API_KEY
+        config: Configuration dictionary (for backward compat, used for OPENROUTER_API_KEY fallback)
+        ai_config: AI configuration model with model, api_key, temperature, etc.
         github_context: Optional GitHub context for more realistic messages
 
     Returns:
         List of generated messages, or None if generation fails
     """
-    openrouter_key = config.get("OPENROUTER_API_KEY")
+    # Get API key (env var > ai_config > config dict fallback)
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if not openrouter_key and ai_config:
+        openrouter_key = ai_config.api_key
+    if not openrouter_key:
+        openrouter_key = config.get("OPENROUTER_API_KEY")
+
     if not openrouter_key:
         logger.warning("OPENROUTER_API_KEY not set, skipping AI generation")
         return None
 
-    logger.info("Generating conversations with Gemini 3 Flash...")
+    # Get AI settings from config or use defaults
+    model = ai_config.model if ai_config else "google/gemini-2.0-flash-exp"
+    temperature = ai_config.temperature if ai_config else 0.7
+    max_tokens = ai_config.max_tokens if ai_config else 4000
+    system_prompt = (
+        ai_config.system_prompt
+        if ai_config and ai_config.system_prompt
+        else DEFAULT_AI_SYSTEM_PROMPT
+    )
+
+    logger.info(f"Generating conversations with {model}...")
 
     # Build prompt with GitHub context if available
-    base_prompt = """Generate 20 realistic Slack channel messages for an engineering team support channel.
-
-## CRITICAL: Tone and Length Variety
-Messages MUST vary dramatically in tone and length:
-
-**Tone spectrum** (use all of these across messages):
-- Super casual: "yo anyone know why ci is failing lol", "thx!", "lgtm ship it"
-- Casual: "hey quick q - where's the config for...", "np, happy to help"
-- Normal: "I'm seeing an issue with the auth flow. Has anyone encountered this?"
-- Professional: "Team, please be advised that we'll be performing scheduled maintenance..."
-- Formal announcements: "*[ACTION REQUIRED]* All teams must migrate to v2 API by EOQ"
-
-**Length spectrum** (use all of these):
-- One-word/emoji only: ":+1:", "thx", "lgtm", ":eyes:", "noted"
-- Quick one-liners: "anyone else seeing 503s?", "nvm figured it out"
-- Medium (2-3 sentences): Standard questions and updates
-- Detailed (paragraph with bullets/code): Complex issues, announcements, guides
-
-## Message Types to Include
-1. **Quick acknowledgments** (just reactions or 1-2 words)
-2. **General support questions**: "how do I...", "where can I find...", "what's the best way to..."
-3. **GitHub-specific discussions**: PR reviews, commit questions, code changes, merge conflicts
-4. **CI/CD and workflow issues**: Failed actions, build errors, deployment problems
-5. **Incident response**: Outages, errors, postmortems
-6. **Announcements**: Deprecations, releases, maintenance windows
-7. **Casual team chat**: Quick kudos, jokes, offtopic-ish comments
-
-## GitHub Actions / Workflow Errors (include several of these)
-Reference actual workflow failures with realistic error messages:
-- ":x: *Workflow failed*: `build.yml` on `main` - `npm ERR! peer dep issue`"
-- "anyone know why the *deploy-prod* action keeps timing out? been stuck for 3 runs now"
-- ":rotating_light: CI broken on <PR link> - `Error: Process completed with exit code 1`"
-- "the `lint` step is failing with `eslint: command not found` - did someone update the runner?"
-
-## Slack Formatting (use extensively and varied)
-- *bold* for emphasis
-- _italic_ for secondary emphasis or quotes
-- ~strikethrough~ for corrections/outdated info
-- `inline code` for commands, file names, variables
-- Code blocks with triple backticks for multi-line code/logs
-- • bullet points for lists
-- 1. 2. 3. numbered lists for steps
-- > blockquotes for quoting others or logs
-- <https://url.com|link text> for links
-- :emoji_name: for slackmoji (use varied ones: :rocket:, :fire:, :eyes:, :pray:, :100:, :tada:, :thinking_face:, :face_palm:, :sob:, :muscle:, :white_check_mark:, :x:, :warning:, :rotating_light:, :bug:, :hammer_and_wrench:, :ship:, :memo:, :bulb:, :wave:, :coffee:, :thumbsup:, :thumbsdown:, :heart:)
-
-## Reply Patterns
-- Some messages should have NO replies
-- Some should have just ":+1:" or "thx" type replies
-- Some should have back-and-forth debugging conversations
-- Some should have multiple people chiming in with suggestions
-- Include natural typos and casual language in replies
-
-## Examples of Good Variety
-
-CASUAL: "yo :wave: anyone know if the staging db is up? getting connection refused"
-REPLY: "yeah was down for backups, should be back now"
-REPLY: "confirmed, just tested :+1:"
-
-PROFESSIONAL: "*[Scheduled Maintenance Notice]*\nThe production database cluster will undergo maintenance:\n• *When*: Saturday 2am-4am PST\n• *Impact*: Read-only mode for 30 minutes\n• *Action*: No action required, but avoid large writes during this window\n\ncc @oncall"
-
-QUICK: ":eyes:"
-REPLY: "lol"
-
-DETAILED ISSUE:
-":bug: *Bug Report*: User sessions expiring prematurely\n\n*Steps to reproduce*:\n1. Login to dashboard\n2. Wait 5 minutes (no activity)\n3. Session expires (should be 30min)\n\n*Expected*: 30min timeout\n*Actual*: ~5min timeout\n\n`JWT_EXPIRY` looks correct in config. Anyone seen this before?"
-
-WORKFLOW ERROR:
-":x: `deploy-production` failed on <https://github.com/org/repo/actions/runs/12345|run #456>\n```\nError: Container action is not supported on macOS\n```\nwhoops, wrong runner matrix :face_palm:"
-
-ONE-LINER: "nvm found it in the docs"
-
-ANNOUNCEMENT: "hey all :mega: quick reminder that `/api/v1/*` endpoints are *deprecated* and will be removed next sprint. please migrate to v2 - docs here: <https://docs.example.com/v2|API v2 Guide>"
-"""
+    base_prompt = system_prompt
 
     if github_context:
         context_str = "\n\n## REAL PROJECT CONTEXT (USE THIS!)\nYou have access to real GitHub data from the user's repos. HEAVILY reference this in your messages:\n"
@@ -1083,9 +1404,7 @@ ANNOUNCEMENT: "hey all :mega: quick reminder that `/api/v1/*` endpoints are *dep
     }
 
     try:
-        with console.status(
-            "[bold magenta]Generating messages with Gemini 3 Flash...", spinner="dots"
-        ):
+        with console.status(f"[bold magenta]Generating messages with {model}...", spinner="dots"):
             response = httpx.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -1094,10 +1413,10 @@ ANNOUNCEMENT: "hey all :mega: quick reminder that `/api/v1/*` endpoints are *dep
                     "HTTP-Referer": "https://github.com/echohello-dev/yap-on-slack",
                 },
                 json={
-                    "model": "google/gemini-3-flash-preview",
+                    "model": model,
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.7,
-                    "max_tokens": 4000,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
                     "top_p": 0.9,
                     "response_format": {
                         "type": "json_schema",
@@ -1114,7 +1433,7 @@ ANNOUNCEMENT: "hey all :mega: quick reminder that `/api/v1/*` endpoints are *dep
             try:
                 data = json.loads(content)
                 messages: list[dict[str, Any]] = data.get("messages", [])
-                logger.info(f"✓ Generated {len(messages)} messages from Gemini 3 Flash")
+                logger.info(f"✓ Generated {len(messages)} messages from {model}")
                 return messages
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse JSON response: {type(e).__name__}: {e}")
@@ -1435,6 +1754,11 @@ Examples:
         """,
     )
     parser.add_argument(
+        "--config",
+        type=Path,
+        help="Path to config.yaml file (default: ./config.yaml or ~/.config/yap-on-slack/config.yaml)",
+    )
+    parser.add_argument(
         "--messages",
         type=Path,
         help="Path to custom messages JSON file (default: messages.json)",
@@ -1486,7 +1810,7 @@ Examples:
     parser.add_argument(
         "--use-ai",
         action="store_true",
-        help="Generate messages using OpenRouter Gemini 3 Flash (requires OPENROUTER_API_KEY)",
+        help="Generate messages using OpenRouter (auto-selects best model, requires OPENROUTER_API_KEY)",
     )
     parser.add_argument(
         "--debug-auth",
@@ -1505,17 +1829,63 @@ def main() -> None:
         logger.setLevel(logging.DEBUG)
         logging.getLogger("httpx").setLevel(logging.DEBUG)
 
-    app_config, env = load_config(args.users)
+    # Try unified config first, fall back to legacy config
+    try:
+        app_config, env = load_unified_config(args.config)
+        # Get unified config if it was loaded
+        discovered_config = discover_config_file(args.config)
+        unified_config_obj: UnifiedConfig | None = None
+        if discovered_config:
+            with discovered_config.open() as f:
+                config_data = yaml.safe_load(f)
+            if isinstance(config_data, dict):
+                unified_config_obj = UnifiedConfig(**config_data)
+    except (ValueError, FileNotFoundError) as e:
+        # Fallback to legacy config loading if unified config fails
+        logger.debug(f"Unified config failed, trying legacy: {e}")
+        try:
+            app_config, env = load_config(args.users)
+            unified_config_obj = None
+        except Exception as legacy_error:
+            logger.error(f"Configuration loading failed: {legacy_error}")
+            raise
 
     # Try AI generation if requested
     messages: list[dict[str, Any]] | None = None
     if args.use_ai:
         github_context = get_github_context(env)
-        messages = generate_messages_with_ai(env, github_context)
+        ai_config = unified_config_obj.ai if unified_config_obj else None
+        messages = generate_messages_with_ai(env, ai_config, github_context)
         if not messages:
             logger.warning("AI generation failed, falling back to default messages")
         else:
             _assign_users_to_ai_messages(app_config, messages)
+
+    # Check for messages in unified config
+    if not messages and unified_config_obj and unified_config_obj.messages:
+        logger.info(f"Using {len(unified_config_obj.messages)} messages from config file")
+        # Convert MessageConfigModel to dict format expected by downstream code
+        messages = []
+        for msg_config in unified_config_obj.messages:
+            msg_dict: dict[str, Any] = {
+                "text": msg_config.text,
+                "user": msg_config.user,
+                "reactions": msg_config.reactions,
+                "replies": [],
+            }
+            # Convert replies
+            for reply in msg_config.replies:
+                if isinstance(reply, str):
+                    msg_dict["replies"].append(reply)
+                else:
+                    msg_dict["replies"].append(
+                        {
+                            "text": reply.text,
+                            "user": reply.user,
+                        }
+                    )
+            messages.append(msg_dict)
+        console.print(f"[green]✓ Loaded {len(messages)} messages from config file[/green]")
 
     # Fall back to file or default messages
     if not messages:
