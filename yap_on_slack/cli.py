@@ -7,8 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
-from rich.progress import (BarColumn, Progress, SpinnerColumn,
-                           TaskProgressColumn, TextColumn)
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -74,11 +73,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # Handle interactive channel selection
     if args.interactive or args.channel_id:
-        from yap_on_slack.post_messages import (SlackAPIError,
-                                                SlackNetworkError,
-                                                SlackRateLimitError,
-                                                list_channels,
-                                                load_unified_config)
+        from yap_on_slack.post_messages import (
+            SlackAPIError,
+            SlackNetworkError,
+            SlackRateLimitError,
+            list_channels,
+            load_unified_config,
+        )
 
         # Load config to get credentials
         try:
@@ -278,7 +279,7 @@ def cmd_version(args: argparse.Namespace) -> int:
     # Show GitHub URL
     github_url = "https://github.com/echohello-dev/yap-on-slack"
     if commit:
-        commit_url = f"{github_url}/tree/{commit}"
+        commit_url = f"{github_url}/commit/{commit}"
         console.print(f"[dim]→[/dim] [link={commit_url}]{commit_url}[/link]")
     else:
         console.print(f"[dim]→[/dim] [link={github_url}]{github_url}[/link]")
@@ -337,12 +338,16 @@ def cmd_show_schema(args: argparse.Namespace) -> int:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     """Scan a Slack channel and generate system prompts."""
-    from yap_on_slack.post_messages import (SlackAPIError, SlackNetworkError,
-                                            SlackRateLimitError,
-                                            fetch_channel_messages,
-                                            generate_system_prompts,
-                                            get_channel_info, list_channels,
-                                            load_unified_config)
+    from yap_on_slack.post_messages import (
+        SlackAPIError,
+        SlackNetworkError,
+        SlackRateLimitError,
+        fetch_channel_messages,
+        generate_system_prompts,
+        get_channel_info,
+        list_channels,
+        load_unified_config,
+    )
 
     console.print("\n[bold blue]━━━ Yap on Slack: Channel Scanner ━━━[/bold blue]\n")
 

@@ -73,7 +73,7 @@ class TestVersionCommand:
 
             assert result == 0
             second_call = str(mock_console.print.call_args_list[1])
-            assert "/tree/abc1234" in second_call
+            assert "/commit/abc1234" in second_call
 
 
 class TestGetGitCommit:
