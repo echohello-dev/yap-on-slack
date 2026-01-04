@@ -3,7 +3,10 @@
     "packages": {
         ".": {
             "package-name": "yap-on-slack",
-            "release-as": "1.0.0"
+            "release-as": "1.0.0",
+            "extra-files": [
+                "yap_on_slack/__init__.py"
+            ]
         }
     },
     "bootstrap-sha": "ff07d24dbb57f6a6e0b9c75cf6d56c2fc0d0b25e"
