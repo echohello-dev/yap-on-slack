@@ -8,8 +8,7 @@ from pathlib import Path
 
 from platformdirs import user_config_dir
 from rich.console import Console
-from rich.progress import (BarColumn, Progress, SpinnerColumn,
-                           TaskProgressColumn, TextColumn)
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -114,8 +113,149 @@ ai:
 
 def cmd_run(args: argparse.Namespace) -> int:
     """Run the message posting."""
+    import os
+
     # Import here to avoid circular imports and speed up --help
     from yap_on_slack.post_messages import main as post_messages_main
+
+    # Handle interactive channel selection
+    if args.interactive or args.channel_id:
+        from yap_on_slack.post_messages import (
+            SlackAPIError,
+            SlackNetworkError,
+            SlackRateLimitError,
+            list_channels,
+            load_unified_config,
+        )
+
+        # Load config to get credentials
+        try:
+            app_config, env = load_unified_config(args.config)
+        except ValueError as e:
+            console.print(f"[bold red]Configuration error:[/bold red] {e}")
+            return 1
+
+        if not app_config.users:
+            console.print("[bold red]Error:[/bold red] No users configured")
+            return 1
+
+        user = app_config.users[0]
+        config = {
+            "SLACK_ORG_URL": app_config.workspace.SLACK_ORG_URL,
+            "SLACK_CHANNEL_ID": app_config.workspace.SLACK_CHANNEL_ID,
+            "SLACK_TEAM_ID": app_config.workspace.SLACK_TEAM_ID,
+            "SLACK_XOXC_TOKEN": user.SLACK_XOXC_TOKEN,
+            "SLACK_XOXD_TOKEN": user.SLACK_XOXD_TOKEN,
+        }
+        if user.SLACK_COOKIES:
+            config["SLACK_COOKIES"] = user.SLACK_COOKIES
+
+        if args.interactive:
+            console.print("\n[bold cyan]Fetching available channels...[/bold cyan]")
+            try:
+                channels = list_channels(config)
+            except (SlackAPIError, SlackNetworkError, SlackRateLimitError) as e:
+                console.print(f"[bold red]Error fetching channels:[/bold red] {e}")
+                return 1
+
+            if not channels:
+                console.print(
+                    "[bold red]Error:[/bold red] No channels accessible with current credentials"
+                )
+                return 1
+
+            # Display channel table
+            table = Table(title="Available Channels", show_header=True)
+            table.add_column("#", style="cyan", width=4)
+            table.add_column("Name", style="green")
+            table.add_column("ID", style="dim")
+            table.add_column("Members", justify="right", style="magenta")
+            table.add_column("Type", style="yellow")
+
+            for idx, ch in enumerate(channels, 1):
+                ch_type = "\U0001f512 Private" if ch.get("is_private") else "\U0001f4e2 Public"
+                table.add_row(
+                    str(idx),
+                    ch.get("name", ""),
+                    ch.get("id", ""),
+                    str(ch.get("num_members", 0)),
+                    ch_type,
+                )
+
+            console.print(table)
+            console.print()
+
+            # Auto-select if only one channel
+            if len(channels) == 1:
+                selected = channels[0]
+                confirm = Prompt.ask(
+                    f"Only one channel available: #{selected['name']}. Use it?",
+                    choices=["y", "n"],
+                    default="y",
+                )
+                if confirm.lower() != "y":
+                    console.print("[yellow]Aborted.[/yellow]")
+                    return 0
+                channel_id = selected["id"]
+                channel_name = selected["name"]
+            else:
+                # Let user select
+                max_attempts = 3
+                channel_id = None
+                channel_name = None
+                for attempt in range(max_attempts):
+                    selection = Prompt.ask(
+                        "Enter channel number or name (partial match supported)",
+                        default="1",
+                    )
+
+                    # Try to match by number first
+                    try:
+                        idx = int(selection) - 1
+                        if 0 <= idx < len(channels):
+                            selected = channels[idx]
+                            channel_id = selected["id"]
+                            channel_name = selected["name"]
+                            break
+                    except ValueError:
+                        pass
+
+                    # Try partial name match
+                    selection_lower = selection.lower()
+                    matches = [
+                        ch for ch in channels if selection_lower in ch.get("name", "").lower()
+                    ]
+
+                    if len(matches) == 1:
+                        selected = matches[0]
+                        channel_id = selected["id"]
+                        channel_name = selected["name"]
+                        break
+                    elif len(matches) > 1:
+                        console.print(
+                            f"[yellow]Multiple matches:[/yellow] {', '.join(m['name'] for m in matches[:5])}"
+                        )
+                        console.print("Please be more specific.")
+                    else:
+                        console.print(f"[red]No channel matching '{selection}'[/red]")
+
+                    if attempt == max_attempts - 1:
+                        console.print("[bold red]Max attempts reached. Aborting.[/bold red]")
+                        return 1
+
+                if not channel_id:
+                    return 1
+
+            console.print(
+                f"\n[bold green]\u2713 Selected:[/bold green] #{channel_name} ({channel_id})\n"
+            )
+            # Set environment variable to override config
+            os.environ["SLACK_CHANNEL_ID"] = channel_id
+
+        elif args.channel_id:
+            # Direct channel ID provided
+            os.environ["SLACK_CHANNEL_ID"] = args.channel_id
+            console.print(f"\n[bold green]\u2713 Using channel:[/bold green] {args.channel_id}\n")
 
     # Build sys.argv for the existing parser
     new_argv = ["yap-on-slack"]
@@ -166,12 +306,16 @@ def cmd_version(args: argparse.Namespace) -> int:
 
 def cmd_scan(args: argparse.Namespace) -> int:
     """Scan a Slack channel and generate system prompts."""
-    from yap_on_slack.post_messages import (SlackAPIError, SlackNetworkError,
-                                            SlackRateLimitError,
-                                            fetch_channel_messages,
-                                            generate_system_prompts,
-                                            get_channel_info, list_channels,
-                                            load_unified_config)
+    from yap_on_slack.post_messages import (
+        SlackAPIError,
+        SlackNetworkError,
+        SlackRateLimitError,
+        fetch_channel_messages,
+        generate_system_prompts,
+        get_channel_info,
+        list_channels,
+        load_unified_config,
+    )
 
     console.print("\n[bold blue]━━━ Yap on Slack: Channel Scanner ━━━[/bold blue]\n")
 
@@ -595,6 +739,17 @@ Commands can also be invoked as:
         "--config",
         type=Path,
         help="Path to config.yaml file (default: ./config.yaml or ~/.config/yap-on-slack/config.yaml)",
+    )
+    run_parser.add_argument(
+        "--channel-id",
+        type=str,
+        help="Override channel ID from config (e.g., C1234567890)",
+    )
+    run_parser.add_argument(
+        "--interactive",
+        "-i",
+        action="store_true",
+        help="Interactive channel selector",
     )
     run_parser.add_argument(
         "--messages",

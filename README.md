@@ -103,6 +103,9 @@ yos run --messages custom.json
 # Generate messages with AI (requires OPENROUTER_API_KEY)
 yos run --use-ai
 
+# Interactive channel selector
+yos run --interactive
+
 # Dry run (validate without posting)
 yos run --dry-run
 
@@ -126,6 +129,9 @@ yos --version
 - `--force, -f` - Overwrite existing files
 
 **`yos run`** - Post messages to Slack
+- `--config PATH` - Path to config.yaml file
+- `--channel-id ID` - Override channel ID from config
+- `--interactive, -i` - Interactive channel selector
 - `--messages PATH` - Custom messages JSON file
 - `--users PATH` - Custom users YAML config
 - `--user NAME` - Force specific user for all messages

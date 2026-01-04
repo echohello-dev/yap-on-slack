@@ -37,6 +37,7 @@ mise run install
 yos init            # Create config.yaml in ~/.config/yap-on-slack/ (default)
 yos init --local    # Create config.yaml in current directory
 yos run             # Post messages to Slack
+yos run -i          # Interactive channel selector
 yos run --dry-run   # Validate without posting
 yos run --use-ai    # Generate AI messages
 yos scan -i         # Scan channel interactively and generate system prompts
