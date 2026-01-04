@@ -34,6 +34,10 @@ description = "Run the message poster"
 run = "uv run python -m yap_on_slack.post_messages"
 
 [tasks.build]
+description = "Build Python package"
+run = ["uv pip install build", "python -m build"]
+
+[tasks.build-docker]
 description = "Build Docker image"
 run = "docker build -t yap-on-slack ."
 
