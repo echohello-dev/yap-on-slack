@@ -14,8 +14,8 @@ description = "Run linter"
 run = "uv run ruff check ."
 
 [tasks.format]
-description = "Format code"
-run = "uv run ruff format ."
+description = "Format code with black"
+run = "uv run black ."
 
 [tasks.test]
 description = "Run tests"

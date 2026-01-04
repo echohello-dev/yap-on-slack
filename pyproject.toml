@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "black>=25.1.0",
     "mypy>=1.14.1",
     "pre-commit>=4.0.1",
     "pytest>=9.0.2",
@@ -40,6 +41,10 @@ packages = ["yap_on_slack"]
 
 [tool.hatch.build.targets.sdist]
 include = ["yap_on_slack/**/*", "schema/**/*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
 
 [tool.ruff]
 line-length = 100
