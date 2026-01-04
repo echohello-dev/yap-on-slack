@@ -35,52 +35,14 @@ def cmd_init(args: argparse.Namespace) -> int:
         console.print("  Use [bold]--force[/bold] to overwrite")
         return 1
 
-    # Read template from config.yaml.example
-    template_path = Path(__file__).parent.parent / "config.yaml.example"
-    if template_path.exists():
+    # Read template from templates directory
+    template_path = Path(__file__).parent / "templates" / "config.yaml.template"
+    try:
         template_content = template_path.read_text()
-    else:
-        # Fallback inline template if example file not found
-        template_content = """\
-# yaml-language-server: $schema=https://raw.githubusercontent.com/echohello-dev/yap-on-slack/main/schema/config.schema.json
-# Yap on Slack Configuration
-
-# Workspace settings (required)
-workspace:
-  org_url: https://your-workspace.slack.com
-  channel_id: C0123456789
-  team_id: T0123456789
-
-# Default credentials (required)
-credentials:
-  xoxc_token: xoxc-your-token-here
-  xoxd_token: xoxd-your-token-here
-  cookies: ""
-
-# User selection strategy
-user_strategy: round_robin  # round_robin | random
-
-# Additional users (optional)
-# users:
-#   - name: alice
-#     xoxc_token: xoxc-alice-token
-#     xoxd_token: xoxd-alice-token
-#   - name: bob
-#     xoxc_token: xoxc-bob-token
-#     xoxd_token: xoxd-bob-token
-
-# AI settings (optional)
-ai:
-  enabled: false
-  model: openrouter/auto              # Auto-selects best model (recommended)
-  # See top weekly models: https://openrouter.ai/models?order=top-weekly
-  api_key: ""
-  temperature: 0.7
-  max_tokens: 4000
-  # system_prompt: |                  # Optional: override default prompt
-  #   Your custom prompt here
-  # Default: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/prompts/generate_messages.txt
-"""
+    except FileNotFoundError:
+        console.print(f"[bold red]Error:[/bold red] Template file not found at {template_path}")
+        console.print("Please reinstall yap-on-slack to restore the template file.")
+        return 1
 
     # Write config file
     config_file.write_text(template_content)
@@ -321,6 +283,55 @@ def cmd_version(args: argparse.Namespace) -> int:
         console.print(f"[dim]→[/dim] [link={commit_url}]{commit_url}[/link]")
     else:
         console.print(f"[dim]→[/dim] [link={github_url}]{github_url}[/link]")
+
+    return 0
+
+
+def cmd_show_config(args: argparse.Namespace) -> int:
+    """Display the configuration template."""
+    template_path = Path(__file__).parent / "templates" / "config.yaml.template"
+
+    try:
+        template_content = template_path.read_text()
+    except FileNotFoundError:
+        console.print(f"[bold red]Error:[/bold red] Template file not found at {template_path}")
+        console.print("Please reinstall yap-on-slack to restore the template file.")
+        return 1
+
+    console.print("\n[bold blue]━━━ Config Template ━━━[/bold blue]")
+    console.print(f"[dim]Location: {template_path}[/dim]\n")
+    console.print(template_content)
+
+    return 0
+
+
+def cmd_show_schema(args: argparse.Namespace) -> int:
+    """Display the configuration JSON schema."""
+    schema_path = Path(__file__).parent.parent / "schema" / "config.schema.json"
+
+    try:
+        schema_content = schema_path.read_text()
+    except FileNotFoundError:
+        console.print(f"[bold red]Error:[/bold red] Schema file not found at {schema_path}")
+        console.print("Please reinstall yap-on-slack to restore the schema file.")
+        return 1
+
+    console.print("\n[bold blue]━━━ Config JSON Schema ━━━[/bold blue]")
+    console.print(f"[dim]Location: {schema_path}[/dim]\n")
+
+    if args.pretty:
+        # Pretty-print JSON with syntax highlighting
+        import json
+        try:
+            schema_obj = json.loads(schema_content)
+            from rich.syntax import Syntax
+            pretty_json = json.dumps(schema_obj, indent=2)
+            syntax = Syntax(pretty_json, "json", theme="monokai", line_numbers=False)
+            console.print(syntax)
+        except json.JSONDecodeError:
+            console.print(schema_content)
+    else:
+        console.print(schema_content)
 
     return 0
 
@@ -708,6 +719,12 @@ Examples:
   # Initialize configuration files
   yos init
 
+  # Show config template
+  yos show-config
+
+  # Show JSON schema (with pretty formatting)
+  yos show-schema --pretty
+
   # Run with default messages
   yos run
 
@@ -937,6 +954,28 @@ Commands can also be invoked as:
         help="Show version information",
     )
     version_parser.set_defaults(func=cmd_version)
+
+    # Show-config command
+    show_config_parser = subparsers.add_parser(
+        "show-config",
+        help="Display the configuration template",
+        description="Show the full config.yaml template with all available options",
+    )
+    show_config_parser.set_defaults(func=cmd_show_config)
+
+    # Show-schema command
+    show_schema_parser = subparsers.add_parser(
+        "show-schema",
+        help="Display the configuration JSON schema",
+        description="Show the JSON schema used for config validation",
+    )
+    show_schema_parser.add_argument(
+        "--pretty",
+        "-p",
+        action="store_true",
+        help="Pretty-print JSON with syntax highlighting",
+    )
+    show_schema_parser.set_defaults(func=cmd_show_schema)
 
     args = parser.parse_args()
 

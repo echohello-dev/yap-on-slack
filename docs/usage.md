@@ -738,7 +738,7 @@ cat ~/.config/yap-on-slack/config.yaml | yaml lint
 grep -E "org_url|channel_id|team_id" ~/.config/yap-on-slack/config.yaml
 
 # Use example as template
-cat config.yaml.example
+cat yap_on_slack/templates/config.yaml.template
 
 # Check schema is correct
 # See: https://github.com/echohello-dev/yap-on-slack/blob/main/schema/config.schema.json

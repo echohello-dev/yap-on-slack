@@ -31,6 +31,9 @@ mise run install                           # Install from source
 # Configuration
 yos init                                   # Create config in ~/.config/yap-on-slack/
 yos init --local                           # Create .yos.yaml in current directory
+yos show-config                            # Display config template
+yos show-schema                            # Display JSON schema
+yos show-schema --pretty                   # Display JSON schema with syntax highlighting
 
 # Running
 yos run                                    # Post messages
@@ -45,6 +48,7 @@ yos scan -i                                # Scan channel and generate prompts
 # Development (use mise run)
 mise run lint                              # Run ruff linter
 mise run format                            # Format code
+mise run typecheck                         # Run mypy type checking
 mise run test                              # Run pytest
 ```
 
@@ -53,7 +57,7 @@ mise run test                              # Run pytest
 **Config file locations** (priority order):
 1. `--config` flag → 2. `.yos.yaml` → 3. `config.yaml` → 4. `~/.config/yap-on-slack/config.yaml`
 
-**Minimal config structure** (see config.yaml.example for full details):
+**Minimal config structure** (see yap_on_slack/templates/config.yaml.template for full details):
 ```yaml
 workspace:
   org_url: https://workspace.slack.com
@@ -114,7 +118,7 @@ github:
   include_repo_metadata: true
 
 # Optional: multiple users, messages
-# See config.yaml.example for full structure
+# See yap_on_slack/templates/config.yaml.template for full structure
 ```
 
 **Environment variables override config:**
@@ -134,14 +138,15 @@ github:
 
 1. **Implement the feature** with proper type hints and error handling
 2. **Run linter**: `mise run lint` (fix any issues)
-3. **Run tests**: `mise run test` (ensure all tests pass)
-4. **Update documentation**:
+3. **Run type checker**: `mise run typecheck` (fix any type errors)
+4. **Run tests**: `mise run test` (ensure all tests pass)
+5. **Update documentation**:
    - Update [README.md](README.md) if user-facing feature
    - Update [docs/usage.md](docs/usage.md) for detailed usage/troubleshooting
-   - Update [config.yaml.example](config.yaml.example) for new config options
+   - Update [yap_on_slack/templates/config.yaml.template](yap_on_slack/templates/config.yaml.template) for new config options
    - Update [schema/config.schema.json](schema/config.schema.json) if adding/modifying config fields
    - Consider adding ADR to [docs/adrs/](docs/adrs/) for significant decisions
-5. **Test end-to-end**: `yos run --dry-run` to validate integration
+6. **Test end-to-end**: `yos run --dry-run` to validate integration
 
 **Note**: This tool uses Slack session tokens (xoxc/xoxd) extracted from browser dev tools, not bot tokens. See [docs/usage.md](docs/usage.md#authentication-setup) for extraction details.
 

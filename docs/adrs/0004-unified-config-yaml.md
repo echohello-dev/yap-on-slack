@@ -64,6 +64,6 @@ Use JSON for configuration since we already have JSON Schema. Rejected because J
 ## References
 
 - [Commit fd48d84](https://github.com/echohello-dev/yap-on-slack/commit/fd48d84) - Implementation commit
-- [config.yaml.example](../../config.yaml.example) - Configuration template
+- [yap_on_slack/templates/config.yaml.template](../../yap_on_slack/templates/config.yaml.template) - Configuration template
 - [schema/config.schema.json](../../schema/config.schema.json) - JSON Schema for validation
 - [ADR 0002](0002-multi-user-yaml-configuration.md) - Previous multi-user configuration (partially superseded)

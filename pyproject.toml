@@ -32,6 +32,18 @@ yos = "yap_on_slack.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["yap_on_slack"]
+
+[tool.hatch.build.targets.wheel.sources]
+"yap_on_slack" = "yap_on_slack"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "yap_on_slack/**/*",
+    "schema/**/*",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py313"
