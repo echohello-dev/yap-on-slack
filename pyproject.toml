@@ -39,10 +39,7 @@ packages = ["yap_on_slack"]
 "yap_on_slack" = "yap_on_slack"
 
 [tool.hatch.build.targets.sdist]
-include = [
-    "yap_on_slack/**/*",
-    "schema/**/*",
-]
+include = ["yap_on_slack/**/*", "schema/**/*"]
 
 [tool.ruff]
 line-length = 100
