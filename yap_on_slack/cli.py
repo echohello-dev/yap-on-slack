@@ -274,6 +274,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         new_argv.append("--verbose")
     if args.use_ai:
         new_argv.append("--use-ai")
+    if args.model != "openrouter/auto":  # Only add if not default
+        new_argv.extend(["--model", args.model])
     if args.debug_auth:
         new_argv.append("--debug-auth")
 
@@ -792,6 +794,12 @@ Commands can also be invoked as:
         "--use-ai",
         action="store_true",
         help="Generate messages using OpenRouter (auto-selects best model, requires OPENROUTER_API_KEY)",
+    )
+    run_parser.add_argument(
+        "--model",
+        type=str,
+        default="openrouter/auto",
+        help="OpenRouter model for AI generation (default: openrouter/auto, see https://openrouter.ai/models)",
     )
     run_parser.add_argument(
         "--debug-auth",

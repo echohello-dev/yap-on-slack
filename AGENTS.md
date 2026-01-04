@@ -9,6 +9,7 @@ Simulate realistic Slack messages in channels for testing purposes. Python CLI t
 Python CLI tool with:
 - **yap_on_slack/cli.py** — CLI entry point (`yos`, `yaponslack`, `yap-on-slack`)
 - **yap_on_slack/post_messages.py** — Core message posting logic
+- **yap_on_slack/prompts/** — System prompt templates for AI (generate_messages.txt, generate_channel_prompts.txt)
 - **config.yaml** — Unified configuration file (workspace, credentials, users, messages, AI settings)
 - **schema/config.schema.json** — JSON Schema for config validation
 - **config.yaml.example** — Configuration template
@@ -39,9 +40,11 @@ yos init --local    # Create .yos.yaml in current directory
 yos run             # Post messages to Slack
 yos run -i          # Interactive channel selector
 yos run --dry-run   # Validate without posting
-yos run --use-ai    # Generate AI messages
+yos run --use-ai    # Generate AI messages with openrouter/auto model
+yos run --use-ai --model google/gemini-2.5-flash  # Use specific model
 yos scan -i         # Scan channel interactively and generate system prompts
 yos scan --channel-id C123  # Scan specific channel
+yos scan --channel-id C123 --model grok-2  # Scan with specific LLM
 yos --version       # Show version
 ```
 
@@ -117,6 +120,7 @@ ai:
   max_tokens: 4000
   # system_prompt: |  # Optional: custom prompt (overrides default)
   #   Generate realistic Slack messages...
+  # Default: yap_on_slack/prompts/generate_messages.txt
 
 # Channel scanning settings (for `yos scan` command)
 scan:
@@ -125,6 +129,7 @@ scan:
   output_dir: ~/.config/yap-on-slack/scan   # Where to save prompts and exports
   model: openrouter/auto                    # Model for prompt generation
   export_data: true                         # Export messages to text file
+  # Default system prompt: yap_on_slack/prompts/generate_channel_prompts.txt
 ```
 
 **Environment variables** (override config file):
@@ -160,7 +165,6 @@ Messages can be defined in:
 - **Python 3.13** — Latest Python version
 - **httpx** — Async HTTP client for Slack API
 - **pydantic** — Configuration validation
-- **platformdirs** — Cross-platform config directory resolution
 - **rich** — Terminal UI with progress bars
 - **python-dotenv** — Environment configuration
 - **pyaml** — YAML configuration parsing

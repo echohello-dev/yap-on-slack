@@ -5,6 +5,7 @@
 - [Authentication Setup](#authentication-setup)
 - [Getting Slack Credentials](#getting-slack-credentials)
 - [Configuration](#configuration)
+- [Installation](#installation)
 - [Usage Examples](#usage-examples)
 - [Troubleshooting](#troubleshooting)
 - [Common Issues](#common-issues)
@@ -199,81 +200,149 @@ You can also use a Bot token instead of a User token:
 
 ## Configuration
 
-### Environment Variables
+### Config File Locations
 
-Create a `.env` file in the project root:
+Yap on Slack uses **YAML configuration** (`config.yaml` or `.yos.yaml`). Config files are discovered in this priority order:
+
+1. **`--config` flag** (explicit path from command line)
+2. **`.yos.yaml`** (current directory - highest priority, use with `--local`)
+3. **`config.yaml`** (current directory)
+4. **`~/.config/yap-on-slack/config.yaml`** (XDG home directory - default)
+
+**Initialize configuration:**
 
 ```bash
-# Copy from example
-cp .env.example .env
+# Create ~/.config/yap-on-slack/config.yaml (default location)
+yos init
 
-# Edit with your credentials
-nano .env
+# Create .yos.yaml in current directory (project-specific)
+yos init --local
+
+# Force overwrite existing config
+yos init --force
 ```
 
-**Required Variables:**
+### Configuration File Structure
 
-```env
-SLACK_USER_NAME=default
-SLACK_XOXC_TOKEN=xoxc-1234567890-1234567890-1234567890-abcdef
-SLACK_XOXD_TOKEN=xoxd-abcdef123456
-SLACK_ORG_URL=https://your-workspace.slack.com
-SLACK_CHANNEL_ID=C01234ABC56
-SLACK_TEAM_ID=T01234ABC56
-```
-
-**Optional Variables:**
-
-```env
-LOG_LEVEL=INFO  # DEBUG, INFO, WARNING, ERROR
-
-# Optional: extra Slack cookies (advanced)
-# Some workspaces/sessions require additional cookies (e.g. `x`, `d-s`) besides `d`.
-# Provide them as a standard Cookie header string, e.g. "x=...; d-s=...".
-SLACK_COOKIES=
-
-# Optional multi-user config (YAML)
-# - If users.yaml/users.yml exists in the repo root, it will be auto-loaded.
-# - You can also point at a specific file:
-SLACK_USERS_FILE=users.yaml
-
-# Or provide the YAML inline:
-SLACK_USERS_YAML='{"users": []}'
-```
-
-### Multi-user configuration (YAML)
-
-If you want multiple users posting into the same channel (different browser sessions), create a `users.yaml` in the project root (it is gitignored by default):
+Create `config.yaml` with the following structure:
 
 ```yaml
-strategy: round_robin  # or "random"
+# yaml-language-server: $schema=https://raw.githubusercontent.com/echohello-dev/yap-on-slack/main/schema/config.schema.json
+
+# Workspace settings (required)
+workspace:
+  org_url: https://your-workspace.slack.com
+  channel_id: C0123456789
+  team_id: T0123456789
+
+# Default credentials (required)
+credentials:
+  xoxc_token: xoxc-your-token-here
+  xoxd_token: xoxd-your-token-here
+  cookies: ""  # optional: additional cookies if needed (e.g., "x=...; d-s=...")
+
+# User selection strategy
+user_strategy: round_robin  # round_robin | random
+
+# Additional users (optional)
 users:
   - name: alice
-    SLACK_XOXC_TOKEN: xoxc-...
-    SLACK_XOXD_TOKEN: xoxd-...
+    xoxc_token: xoxc-alice-token
+    xoxd_token: xoxd-alice-token
   - name: bob
-    SLACK_XOXC_TOKEN: xoxc-...
-    SLACK_XOXD_TOKEN: xoxd-...
+    xoxc_token: xoxc-bob-token
+    xoxd_token: xoxd-bob-token
+
+# Messages to post (optional, can also use --use-ai)
+messages:
+  - text: "Good morning team! :wave:"
+    user: alice  # optional
+    replies:
+      - "Hey! Ready for standup?"
+      - text: "Morning everyone"
+        user: bob
+    reactions:
+      - wave
+      - coffee
+
+# AI message generation
+ai:
+  enabled: false
+  model: openrouter/auto  # Auto-selects best model (recommended)
+  # See models: https://openrouter.ai/models?order=top-weekly
+  api_key: ""  # or use OPENROUTER_API_KEY env var
+  temperature: 0.7
+  max_tokens: 4000
+  # system_prompt: |  # Optional: override default prompt
+  #   Your custom system prompt here
+  # Default: yap_on_slack/prompts/generate_messages.txt
+
+# Channel scanning settings (for `yos scan` command)
+scan:
+  limit: 200                                # Max messages to fetch (10-5000)
+  throttle: 0.5                             # Delay between API batches in seconds
+  output_dir: ~/.config/yap-on-slack/scan   # Where to save prompts
+  model: openrouter/auto                    # LLM for prompt generation
+  export_data: true                         # Export messages to text file
+  # Default system prompt: yap_on_slack/prompts/generate_channel_prompts.txt
+```
+
+### Environment Variables
+
+Environment variables override config file settings:
+
+```bash
+# Workspace
+export SLACK_ORG_URL=https://your-workspace.slack.com
+export SLACK_CHANNEL_ID=C01234ABC56
+export SLACK_TEAM_ID=T01234ABC56
+
+# Credentials
+export SLACK_XOXC_TOKEN=xoxc-...
+export SLACK_XOXD_TOKEN=xoxd-...
+
+# AI generation
+export OPENROUTER_API_KEY=sk-or-v1-...
+
+# Optional
+export LOG_LEVEL=INFO  # DEBUG, INFO, WARNING, ERROR
+export GITHUB_TOKEN=ghp_...  # For AI to reference your repos
+```
+
+> **Note**: Environment variables take precedence over config file values.
+
+### Multi-user Configuration
+
+To post messages as different users (different browser sessions), define them in `config.yaml`:
+
+```yaml
+user_strategy: round_robin  # or "random"
+
+users:
+  - name: alice
+    xoxc_token: xoxc-alice-token
+    xoxd_token: xoxd-alice-token
+  - name: bob
+    xoxc_token: xoxc-bob-token
+    xoxd_token: xoxd-bob-token
 ```
 
 **How user selection works:**
 
-1. If `--user <name>` is passed on the command line, that user is used for all messages
-2. If a message/reply has a `"user": "<name>"` field in the JSON, that specific user is used
-3. Otherwise, the configured **strategy** is applied:
-   - `round_robin` (default): cycles through users in order (user 0, user 1, user 2, user 0, ...)
-   - `random`: picks a random user for each message/reply
-
-The `.env` user is always added to the user list as "default" (or `SLACK_USER_NAME` if set), so with the config above you'd have 3 users: default, alice, bob.
+1. If `--user <name>` is passed on command line, that user is used for all messages
+2. If a message has `user: <name>`, that user posts it
+3. Otherwise, the configured **strategy** determines the poster:
+   - `round_robin` (default): cycles through users in order (user 0, 1, 2, 0, ...)
+   - `random`: picks a random user for each message
 
 **Notes:**
-- If `users.yaml` or `users.yml` exists in the project root, it's auto-loaded
-- If your `SLACK_XOXD_TOKEN` cookie contains URL-encoded characters (e.g. `%2F`), keep it as-is - the script handles it
-- Per-user `SLACK_COOKIES` can be set for users that need extra session cookies
+- The credentials user is added as "default" to the user list
+- If `SLACK_XOXD_TOKEN` contains URL-encoded characters (e.g., `%2F`), keep as-is - the script handles it
+- Each user can have optional `cookies` field for extra session cookies
 
 ### Custom Messages
 
-Create a `messages.json` file (or use any name with `--messages` flag):
+Define messages directly in `config.yaml` under `messages:` or use a separate JSON file:
 
 ```json
 [
@@ -283,7 +352,8 @@ Create a `messages.json` file (or use any name with `--messages` flag):
     "replies": [
       "First reply",
       {"text": "Second reply (as bob)", "user": "bob"}
-    ]
+    ],
+    "reactions": ["thumbsup", "thinking_face"]
   },
   {
     "text": "Message without explicit user - uses round-robin strategy"
@@ -291,10 +361,11 @@ Create a `messages.json` file (or use any name with `--messages` flag):
 ]
 ```
 
-**User assignment in messages:**
-- If `user` is specified on a message or reply, that user posts it
-- If `user` is omitted, the configured strategy (round_robin/random) determines the poster
-- With round-robin, the message index determines the user: message 0 → user 0, message 1 → user 1, etc.
+**Message fields:**
+- `text` (required): Message content
+- `user` (optional): Which user posts it (must exist in config)
+- `replies` (optional): Array of reply messages (same structure as messages)
+- `reactions` (optional): Array of emoji names to react with
 
 **Supported Formatting:**
 
@@ -303,7 +374,7 @@ Create a `messages.json` file (or use any name with `--messages` flag):
 - `~strikethrough~` → Strikethrough
 - `` `code` `` → Inline code
 - `<url|label>` → Link with label
-- `:emoji_name:` → Emoji (e.g., `:rocket:`)
+- `:emoji_name:` → Emoji (e.g., `:rocket:`, `:warning:`)
 - `•` or `- ` → Bullet points
 
 ## Installation
@@ -351,31 +422,36 @@ mise run run
 ### Initialize Configuration
 
 ```bash
-# Create .env, users.yaml, and messages.json in current directory
+# Create ~/.config/yap-on-slack/config.yaml (XDG default)
 yos init
 
-# Force overwrite existing files
-yos init --force
+# Create .yos.yaml in current directory (project-specific)
+yos init --local
+
+# Edit the created config file
+nano ~/.config/yap-on-slack/config.yaml
+
+# Add workspace, credentials, and messages
 ```
 
 ### Basic Usage
 
 ```bash
-# Use default messages.json
+# Post messages from config.yaml/messages section
 yos run
 
 # Or with mise (from source)
 mise run run
 ```
 
-### Custom Messages File
+### Interactive Channel Selection
 
 ```bash
-# Use custom messages file
-yos run --messages my-messages.json
+# Choose channel interactively before running
+yos run -i
 
-# Or absolute path
-yos run --messages /path/to/messages.json
+# Or choose with scan command
+yos scan -i
 ```
 
 ### Dry Run (Validate Without Posting)
@@ -384,8 +460,8 @@ yos run --messages /path/to/messages.json
 # Test configuration and message validation
 yos run --dry-run
 
-# With custom messages
-yos run --dry-run --messages test-messages.json
+# With verbose logging to see all details
+yos run --dry-run --verbose
 ```
 
 ### Limit Number of Messages
@@ -429,25 +505,32 @@ yos run --verbose --dry-run
 Generate realistic, varied Slack conversations using AI (requires OpenRouter API key):
 
 ```bash
-# Generate and post AI messages
+# Generate and post AI messages with default model
 yos run --use-ai
 
-# Combine with limits
-yos run --use-ai --limit 10
+# Use specific LLM model
+yos run --use-ai --model google/gemini-2.5-flash
 
-# Dry run to preview generated messages
-yos run --use-ai --dry-run
+# Combine with other options
+yos run --use-ai --model grok-2 --limit 10 --dry-run
 ```
 
 **Setup:**
 1. Get an API key from [OpenRouter](https://openrouter.ai/)
-2. Add to your `.env`:
-   ```env
-   OPENROUTER_API_KEY=sk-or-v1-...
+2. Add to config file or environment:
+   ```yaml
+   ai:
+     enabled: false
+     model: openrouter/auto
+     api_key: sk-or-v1-...
+   ```
+   Or:
+   ```bash
+   export OPENROUTER_API_KEY=sk-or-v1-...
    ```
 
 **What AI generates:**
-- **Varied tones**: From super casual ("yo anyone know why ci is failing lol") to formal announcements ("[ACTION REQUIRED]...")
+- **Varied tones**: From casual ("yo anyone know why ci is failing lol") to formal announcements ("[ACTION REQUIRED]...")
 - **Varied lengths**: One-word reactions (":+1:", "thx") to detailed bug reports with code blocks
 - **GitHub-aware**: References real PRs, commits, and issues from your repos (if `gh` CLI is authenticated)
 - **Workflow errors**: Realistic CI/CD failures, build errors, deployment issues
@@ -470,9 +553,32 @@ gh auth status
 export GITHUB_TOKEN=ghp_...
 ```
 
+### Channel Scanning (Generate System Prompts)
+
+Scan a channel to analyze message patterns and generate system prompts:
+
+```bash
+# Scan channel interactively
+yos scan -i
+
+# Scan specific channel
+yos scan --channel-id C123ABC
+
+# Use specific LLM for analysis
+yos scan --channel-id C123ABC --model grok-2
+
+# Configure scan settings in config.yaml
+# scan:
+#   limit: 200
+#   throttle: 0.5
+#   output_dir: ~/.config/yap-on-slack/scan
+#   model: openrouter/auto
+#   export_data: true
+```
+
 ### Auth Debugging (safe/redacted)
 
-If you are seeing `invalid_auth`, you can print safe diagnostics (no tokens) to help confirm whether the request is being formed correctly:
+If you are seeing `invalid_auth` errors, get safe diagnostics (no tokens printed):
 
 ```bash
 yos run --limit 1 --debug-auth
@@ -483,25 +589,97 @@ This prints:
 - Whether the cookie `d` value looks like an `xoxd-` and its length
 - Slack response `error` and request ID headers
 
+### Multi-user Posting
+
+Post as different users:
+
+```bash
+# Force all messages as specific user
+yos run --user alice
+
+# Or let config.yaml user_strategy handle it
+yos run  # Uses round_robin or random
+
+# Edit config.yaml to define users:
+# users:
+#   - name: alice
+#     xoxc_token: xoxc-...
+#     xoxd_token: xoxd-...
+#   - name: bob
+#     xoxc_token: xoxc-...
+#     xoxd_token: xoxd-...
+```
+
 ### Combined Examples
 
 ```bash
-# Test run with custom messages, limited count
-yos run --messages test.json --limit 2 --dry-run
+# Test run with limits and verbose output
+yos run --limit 2 --dry-run --verbose
 
 # Production run with slower delays
 yos run --delay 5 --reply-delay 2 --reaction-delay 1
 
-# Quick test of first message only
-yos run --limit 1 --verbose
+# AI-generated messages with specific model and preview
+yos run --use-ai --model openrouter/auto --limit 5 --dry-run
 
-# Force a specific user for all messages
-yos run --user alice --limit 5
+# Scan and analyze channel for patterns
+yos scan --channel-id C123ABC --model grok-2
 ```
 
 ## Troubleshooting
 
-### Common Issues
+### Config File Not Found
+
+**Error:** `Config file not found` or unable to find `config.yaml`
+
+**Causes:**
+- Config file not initialized
+- Wrong directory (if using `.yos.yaml`)
+- Typo in config path
+
+**Solutions:**
+```bash
+# Initialize default config in ~/.config/yap-on-slack/
+yos init
+
+# Or create project-specific config
+yos init --local
+
+# Check config file exists
+ls -la ~/.config/yap-on-slack/config.yaml
+# or
+ls -la .yos.yaml
+
+# List where tool looks for config (priority order):
+# 1. --config flag (if provided)
+# 2. ./.yos.yaml (current directory)
+# 3. ./config.yaml (current directory)
+# 4. ~/.config/yap-on-slack/config.yaml (XDG default)
+```
+
+### Config Validation Errors
+
+**Error:** `Config validation error` or `Invalid config format`
+
+**Causes:**
+- Invalid YAML syntax
+- Missing required fields (workspace, credentials)
+- Invalid field values
+
+**Solutions:**
+```bash
+# Validate YAML syntax
+cat ~/.config/yap-on-slack/config.yaml | yaml lint
+
+# Check required fields exist
+grep -E "org_url|channel_id|team_id" ~/.config/yap-on-slack/config.yaml
+
+# Use example as template
+cat config.yaml.example
+
+# Check schema is correct
+# See: https://github.com/echohello-dev/yap-on-slack/blob/main/schema/config.schema.json
+```
 
 #### 1. Authentication Errors
 
@@ -512,15 +690,22 @@ yos run --user alice --limit 5
 - Wrong tokens copied
 - Tokens from different workspace
 - Wrong `SLACK_TEAM_ID`
+- Credentials not in config file
 
 **Solutions:**
 ```bash
+# Verify config file has credentials
+grep -A3 "credentials:" ~/.config/yap-on-slack/config.yaml
+
 # Extract fresh tokens from browser
 # See "Extracting Session Tokens" section above
 
-# Verify tokens in .env are correct
-cat .env | grep SLACK_XOXC_TOKEN
-cat .env | grep SLACK_XOXD_TOKEN
+# Verify tokens in config are correct
+nano ~/.config/yap-on-slack/config.yaml
+
+# Check environment variables (take precedence)
+echo $SLACK_XOXC_TOKEN
+echo $SLACK_XOXD_TOKEN
 
 # Test with dry-run first
 yos run --dry-run
@@ -624,21 +809,36 @@ sleep 60 && yos run
 
 ### Debugging Steps
 
-1. **Verify Environment**
+1. **Verify Configuration File**
    ```bash
-   # Check .env exists and has required vars
-   cat .env
+   # Check config exists and is readable
+   cat ~/.config/yap-on-slack/config.yaml
    
-   # Ensure no extra spaces or quotes
-   grep -v '^#' .env | grep '='
+   # Or if using project-specific config
+   cat .yos.yaml
+   
+   # Validate YAML syntax (no trailing spaces, proper indentation)
+   cat ~/.config/yap-on-slack/config.yaml | head -20
    ```
 
-2. **Test with Dry Run**
+2. **Verify Required Fields**
+   ```bash
+   # Check workspace settings
+   grep -E "org_url|channel_id|team_id" ~/.config/yap-on-slack/config.yaml
+   
+   # Check credentials
+   grep -E "xoxc_token|xoxd_token" ~/.config/yap-on-slack/config.yaml
+   
+   # Ensure values are not empty
+   grep "xoxc_token: " ~/.config/yap-on-slack/config.yaml | grep -v "your-token"
+   ```
+
+3. **Test with Dry Run**
    ```bash
    yos run --dry-run --verbose
    ```
 
-3. **Check Dependencies**
+4. **Check Dependencies**
    ```bash
    # Reinstall with pipx
    pipx reinstall yap-on-slack
@@ -650,20 +850,23 @@ sleep 60 && yos run
    python --version  # Should be 3.13+
    ```
 
-4. **Validate Messages File**
+5. **Validate Messages**
    ```bash
-   # Pretty-print JSON
-   cat messages.json | jq .
+   # If using separate messages file
+   python -c "import yaml; print(yaml.safe_load(open('messages.json')))"
    
-   # Validate with Python
-   python -m json.tool messages.json
+   # Or check messages in config
+   grep -A5 "messages:" ~/.config/yap-on-slack/config.yaml
    ```
 
-5. **Test Minimal Setup**
+6. **Test Minimal Setup**
    ```bash
-   # Use only 1 message
-   echo '[{"text": "Test message"}]' > test.json
-   yos run --messages test.json --limit 1 --dry-run
+   # Create minimal test config
+   yos init --local
+   
+   # Edit .yos.yaml with just workspace + credentials
+   # Then test
+   yos run --limit 1 --dry-run
    ```
 
 ### Getting Help
@@ -671,35 +874,30 @@ sleep 60 && yos run
 If issues persist:
 
 1. **Check Logs**: Run with `--verbose` flag for detailed output
-2. **Verify Tokens**: Extract fresh tokens from browser
-3. **Read Security Docs**: See [SECURITY.md](../SECURITY.md)
-4. **Check Slack Status**: Visit https://status.slack.com
-5. **Review ADRs**: See [docs/adrs/](adrs/) for design decisions
+2. **Verify Config**: Ensure all required fields are in config file
+3. **Verify Tokens**: Extract fresh tokens from browser
+4. **Read Security Docs**: See [SECURITY.md](../SECURITY.md)
+5. **Check Slack Status**: Visit https://status.slack.com
+6. **Review ADRs**: See [docs/adrs/](adrs/) for design decisions and troubleshooting
 
-### Environment-Specific Issues
-
-#### macOS
-
-```bash
-# May need to trust Python certificate
-/Applications/Python\ 3.13/Install\ Certificates.command
-```
-
-#### Linux
-
-```bash
-# Ensure ca-certificates installed
-sudo apt-get install ca-certificates
-
-# Or on RHEL/Fedora
-sudo dnf install ca-certificates
-```
+**Common ADRs for troubleshooting:**
+- [ADR-0001: Slack Session Tokens](adrs/0001-slack-session-tokens.md) - Why we use session tokens
+- [ADR-0003: Form-Urlencoded for Slack API](adrs/0003-slack-api-form-urlencoded.md) - Why we use form-urlencoded encoding
+- [ADR-0004: Unified config.yaml](adrs/0004-unified-config-yaml.md) - Configuration system design
+- [ADR-0006: XDG ~/.config Standard](adrs/0006-xdg-config-over-platformdirs.md) - Config file location choice
 
 #### Docker
 
 ```bash
-# Ensure .env is properly mounted
-docker run --rm --env-file .env yap-on-slack
+# Mount config file from ~/.config
+docker run --rm \
+  -v ~/.config/yap-on-slack:/root/.config/yap-on-slack \
+  ghcr.io/echohello-dev/yap-on-slack:latest yos run
+
+# Or mount local .yos.yaml
+docker run --rm \
+  -v $(pwd)/.yos.yaml:/app/.yos.yaml \
+  ghcr.io/echohello-dev/yap-on-slack:latest yos run
 
 # Or pass variables directly
 docker run --rm \
@@ -708,7 +906,7 @@ docker run --rm \
   -e SLACK_ORG_URL="https://workspace.slack.com" \
   -e SLACK_CHANNEL_ID="C123" \
   -e SLACK_TEAM_ID="T123" \
-  yap-on-slack
+  ghcr.io/echohello-dev/yap-on-slack:latest yos run
 ```
 
 ## Performance Tips

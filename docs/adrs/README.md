@@ -39,3 +39,4 @@ Use the template in [0000-template.md](0000-template.md).
 - [0003: Use Form-Urlencoded Instead of Multipart for Slack API](0003-slack-api-form-urlencoded.md) - **Accepted** (2026-01-02)
 - [0004: Unified config.yaml Configuration System](0004-unified-config-yaml.md) - **Accepted** (2026-01-04)
 - [0005: Channel Scanning for AI System Prompt Generation](0005-channel-scanning-ai-prompts.md) - **Accepted** (2026-01-04)
+- [0006: Use XDG ~/.config Standard Instead of platformdirs](0006-xdg-config-over-platformdirs.md) - **Accepted** (2026-01-05)

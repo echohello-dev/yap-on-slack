@@ -41,81 +41,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-# Default AI system prompt
-DEFAULT_AI_SYSTEM_PROMPT = """Generate 20 realistic Slack channel messages for an engineering team support channel.
 
-## CRITICAL: Tone and Length Variety
-Messages MUST vary dramatically in tone and length:
+def _load_system_prompt(prompt_name: str) -> str:
+    """Load system prompt from file or return default.
 
-**Tone spectrum** (use all of these across messages):
-- Super casual: "yo anyone know why ci is failing lol", "thx!", "lgtm ship it"
-- Casual: "hey quick q - where's the config for...", "np, happy to help"
-- Normal: "I'm seeing an issue with the auth flow. Has anyone encountered this?"
-- Professional: "Team, please be advised that we'll be performing scheduled maintenance..."
-- Formal announcements: "*[ACTION REQUIRED]* All teams must migrate to v2 API by EOQ"
+    Args:
+        prompt_name: Name of the prompt file (e.g., 'generate_messages')
 
-**Length spectrum** (use all of these):
-- One-word/emoji only: ":+1:", "thx", "lgtm", ":eyes:", "noted"
-- Quick one-liners: "anyone else seeing 503s?", "nvm figured it out"
-- Medium (2-3 sentences): Standard questions and updates
-- Detailed (paragraph with bullets/code): Complex issues, announcements, guides
+    Returns:
+        System prompt text
+    """
+    prompt_file = Path(__file__).parent / "prompts" / f"{prompt_name}.txt"
+    if prompt_file.exists():
+        return prompt_file.read_text().strip()
+    logger.warning(f"Prompt file not found: {prompt_file}")
+    return ""
 
-## Message Types to Include
-1. **Quick acknowledgments** (just reactions or 1-2 words)
-2. **General support questions**: "how do I...", "where can I find...", "what's the best way to..."
-3. **GitHub-specific discussions**: PR reviews, commit questions, code changes, merge conflicts
-4. **CI/CD and workflow issues**: Failed actions, build errors, deployment problems
-5. **Incident response**: Outages, errors, postmortems
-6. **Announcements**: Deprecations, releases, maintenance windows
-7. **Casual team chat**: Quick kudos, jokes, offtopic-ish comments
 
-## GitHub Actions / Workflow Errors (include several of these)
-Reference actual workflow failures with realistic error messages:
-- ":x: *Workflow failed*: `build.yml` on `main` - `npm ERR! peer dep issue`"
-- "anyone know why the *deploy-prod* action keeps timing out? been stuck for 3 runs now"
-- ":rotating_light: CI broken on <PR link> - `Error: Process completed with exit code 1`"
-- "the `lint` step is failing with `eslint: command not found` - did someone update the runner?"
-
-## Slack Formatting (use extensively and varied)
-- *bold* for emphasis
-- _italic_ for secondary emphasis or quotes
-- ~strikethrough~ for corrections/outdated info
-- `inline code` for commands, file names, variables
-- Code blocks with triple backticks for multi-line code/logs
-- • bullet points for lists
-- 1. 2. 3. numbered lists for steps
-- > blockquotes for quoting others or logs
-- <https://url.com|link text> for links
-- :emoji_name: for slackmoji (use varied ones: :rocket:, :fire:, :eyes:, :pray:, :100:, :tada:, :thinking_face:, :face_palm:, :sob:, :muscle:, :white_check_mark:, :x:, :warning:, :rotating_light:, :bug:, :hammer_and_wrench:, :ship:, :memo:, :bulb:, :wave:, :coffee:, :thumbsup:, :thumbsdown:, :heart:)
-
-## Reply Patterns
-- Some messages should have NO replies
-- Some should have just ":+1:" or "thx" type replies
-- Some should have back-and-forth debugging conversations
-- Some should have multiple people chiming in with suggestions
-- Include natural typos and casual language in replies
-
-## Examples of Good Variety
-
-CASUAL: "yo :wave: anyone know if the staging db is up? getting connection refused"
-REPLY: "yeah was down for backups, should be back now"
-REPLY: "confirmed, just tested :+1:"
-
-PROFESSIONAL: "*[Scheduled Maintenance Notice]*\\nThe production database cluster will undergo maintenance:\\n• *When*: Saturday 2am-4am PST\\n• *Impact*: Read-only mode for 30 minutes\\n• *Action*: No action required, but avoid large writes during this window\\n\\ncc @oncall"
-
-QUICK: ":eyes:"
-REPLY: "lol"
-
-DETAILED ISSUE:
-":bug: *Bug Report*: User sessions expiring prematurely\\n\\n*Steps to reproduce*:\\n1. Login to dashboard\\n2. Wait 5 minutes (no activity)\\n3. Session expires (should be 30min)\\n\\n*Expected*: 30min timeout\\n*Actual*: ~5min timeout\\n\\n`JWT_EXPIRY` looks correct in config. Anyone seen this before?"
-
-WORKFLOW ERROR:
-":x: `deploy-production` failed on <https://github.com/org/repo/actions/runs/12345|run #456>\\n```\\nError: Container action is not supported on macOS\\n```\\nwhoops, wrong runner matrix :face_palm:"
-
-ONE-LINER: "nvm found it in the docs"
-
-ANNOUNCEMENT: "hey all :mega: quick reminder that `/api/v1/*` endpoints are *deprecated* and will be removed next sprint. please migrate to v2 - docs here: <https://docs.example.com/v2|API v2 Guide>"
-"""
+# Default AI system prompt for generating messages
+DEFAULT_AI_SYSTEM_PROMPT = _load_system_prompt("generate_messages")
 
 
 class SlackAPIError(Exception):
@@ -517,7 +461,9 @@ def discover_config_file(explicit_path: Path | None = None) -> Path | None:
         logger.debug(f"Found config in home: {home_config}")
         return home_config
 
-    logger.debug("No config file found (.yos.yaml, config.yaml, or ~/.config/yap-on-slack/config.yaml)")
+    logger.debug(
+        "No config file found (.yos.yaml, config.yaml, or ~/.config/yap-on-slack/config.yaml)"
+    )
     return None
 
 
