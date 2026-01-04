@@ -585,6 +585,20 @@ def create_ssl_context(ssl_config: SSLConfigModel | None = None) -> bool | ssl.S
     return True
 
 
+def set_ssl_context(ssl_context: bool | ssl.SSLContext) -> None:
+    """Set the global SSL context for all HTTP requests.
+
+    This function updates the module-level _SSL_CONTEXT variable that is used
+    by all httpx calls throughout the module.
+
+    Args:
+        ssl_context: SSL context to use (bool or ssl.SSLContext)
+    """
+    global _SSL_CONTEXT
+    _SSL_CONTEXT = ssl_context
+    logger.debug(f"SSL context set to: {type(ssl_context).__name__}")
+
+
 def discover_config_file(explicit_path: Path | None = None) -> Path | None:
     """Discover config file location.
 

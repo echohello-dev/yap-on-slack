@@ -77,8 +77,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             SlackAPIError,
             SlackNetworkError,
             SlackRateLimitError,
+            SSLConfigModel,
+            create_ssl_context,
             list_channels,
             load_unified_config,
+            set_ssl_context,
         )
 
         # Load config to get credentials
@@ -87,6 +90,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         except ValueError as e:
             console.print(f"[bold red]Configuration error:[/bold red] {e}")
             return 1
+
+        # Apply SSL overrides from CLI arguments
+        ssl_config = app_config.ssl
+        if args.no_verify_ssl:
+            ssl_config = SSLConfigModel(verify=False)
+        elif args.ssl_ca_bundle or args.ssl_no_strict:
+            ssl_config = SSLConfigModel(
+                verify=True,
+                ca_bundle=args.ssl_ca_bundle or (ssl_config.ca_bundle if ssl_config else None),
+                no_strict=args.ssl_no_strict or (ssl_config.no_strict if ssl_config else False),
+            )
+
+        # Initialize SSL context before making API calls
+        ssl_context = create_ssl_context(ssl_config)
+        set_ssl_context(ssl_context)
 
         if not app_config.users:
             console.print("[bold red]Error:[/bold red] No users configured")
@@ -322,9 +340,11 @@ def cmd_show_schema(args: argparse.Namespace) -> int:
     if args.pretty:
         # Pretty-print JSON with syntax highlighting
         import json
+
         try:
             schema_obj = json.loads(schema_content)
             from rich.syntax import Syntax
+
             pretty_json = json.dumps(schema_obj, indent=2)
             syntax = Syntax(pretty_json, "json", theme="monokai", line_numbers=False)
             console.print(syntax)
