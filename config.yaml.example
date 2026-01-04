@@ -58,7 +58,7 @@ ai:
   max_tokens: 4000                            # Max tokens for generation
   # system_prompt: |                          # Optional: custom prompt (overrides default)
   #   Generate realistic Slack messages for testing...
-  # Default system prompt: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/post_messages.py#L49
+  # Default system prompt: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/prompts/generate_messages.txt
 
 # Channel scanning settings (for `yos scan` command)
 # scan:

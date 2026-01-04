@@ -22,10 +22,14 @@ from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.progress import (BarColumn, Progress, SpinnerColumn,
-                           TaskProgressColumn, TextColumn)
-from tenacity import (RetryError, retry, retry_if_exception_type,
-                      stop_after_attempt, wait_exponential)
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 console = Console()
 
@@ -207,6 +211,17 @@ class MessageConfigModel(BaseModel):
     reactions: list[str] = []
 
 
+class GitHubConfigModel(BaseModel):
+    """GitHub integration settings from config file."""
+
+    enabled: bool = True  # Enable by default when token is available
+    token: str | None = None  # Optional explicit token (overrides GITHUB_TOKEN env var)
+    limit: int = 5  # Max repos to fetch context from
+    include_commits: bool = True
+    include_prs: bool = True
+    include_issues: bool = True
+
+
 class AIConfigModel(BaseModel):
     """AI generation settings from config file."""
 
@@ -216,6 +231,7 @@ class AIConfigModel(BaseModel):
     temperature: float = 0.7
     max_tokens: int = 4000
     system_prompt: str | None = None
+    github: GitHubConfigModel | None = None  # GitHub context for AI
 
 
 class ScanConfigModel(BaseModel):
@@ -238,6 +254,7 @@ class UnifiedConfig(BaseModel):
     messages: list[MessageConfigModel] = []
     ai: AIConfigModel | None = None
     scan: ScanConfigModel | None = None
+    github: GitHubConfigModel | None = None  # Top-level GitHub config
 
 
 # Legacy Models (for backward compatibility with messages.json)
@@ -1728,19 +1745,38 @@ def get_user_repos(gh_token: str, max_repos: int = 5) -> list[str]:
     return []
 
 
-def get_github_context(config: dict[str, str]) -> dict[str, Any] | None:
+def get_github_context(
+    config: dict[str, str],
+    *,
+    enabled: bool = True,
+    token: str | None = None,
+    limit: int = 5,
+    include_commits: bool = True,
+    include_prs: bool = True,
+    include_issues: bool = True,
+) -> dict[str, Any] | None:
     """Fetch recent commits, PRs, and issues from user's repositories.
 
     Args:
         config: Configuration dictionary with optional GITHUB_TOKEN
+        enabled: Whether to fetch GitHub context
+        token: Optional explicit GitHub token (overrides GITHUB_TOKEN env var and gh CLI)
+        limit: Max repositories to fetch from
+        include_commits: Include commits in context
+        include_prs: Include PRs in context
+        include_issues: Include issues in context
 
     Returns:
         Dictionary with commits, prs, and issues, or None if unavailable
     """
+    if not enabled:
+        logger.debug("GitHub context disabled")
+        return None
+
     console.print("\n[bold blue]━━━ GitHub Context ━━━[/bold blue]")
 
-    # Try to get GitHub token from config or gh CLI
-    gh_token = config.get("GITHUB_TOKEN")
+    # Try to get GitHub token from explicit param, config, or gh CLI
+    gh_token = token or config.get("GITHUB_TOKEN")
     if not gh_token:
         try:
             logger.debug("GITHUB_TOKEN not set, attempting to get from 'gh auth token'...")
@@ -1768,7 +1804,7 @@ def get_github_context(config: dict[str, str]) -> dict[str, Any] | None:
 
     try:
         # Get user's repos
-        repos = get_user_repos(gh_token)
+        repos = get_user_repos(gh_token, max_repos=limit)
         if not repos:
             logger.warning("No user repos found, skipping GitHub context")
             return None
@@ -1781,85 +1817,90 @@ def get_github_context(config: dict[str, str]) -> dict[str, Any] | None:
                 logger.debug(f"  [{repo_idx}/{len(repos)}] Processing {repo}...")
 
                 # Get recent commits
-                response = httpx.get(
-                    f"https://api.github.com/repos/{repo}/commits",
-                    headers=headers,
-                    params={"per_page": 5},
-                    timeout=10,
-                )
-                if response.status_code == 200:
-                    commits = response.json()
-                    fetched = len(commits[:3])
-                    context["commits"].extend(
-                        [
-                            {
-                                "message": c.get("commit", {}).get("message", ""),
-                                "author": c.get("commit", {})
-                                .get("author", {})
-                                .get("name", "Unknown"),
-                                "repo": repo,
-                                "date": c.get("commit", {}).get("author", {}).get("date", ""),
-                            }
-                            for c in commits[:3]
-                        ]
+                if include_commits:
+                    response = httpx.get(
+                        f"https://api.github.com/repos/{repo}/commits",
+                        headers=headers,
+                        params={"per_page": 5},
+                        timeout=10,
                     )
-                    logger.debug(f"    ✓ Fetched {fetched} commits")
-                else:
-                    logger.debug(f"    ⚠ Commits API returned {response.status_code}")
+                    if response.status_code == 200:
+                        commits = response.json()
+                        fetched = len(commits[:3])
+                        context["commits"].extend(
+                            [
+                                {
+                                    "message": c.get("commit", {}).get("message", ""),
+                                    "author": c.get("commit", {})
+                                    .get("author", {})
+                                    .get("name", "Unknown"),
+                                    "repo": repo,
+                                    "date": c.get("commit", {}).get("author", {}).get("date", ""),
+                                }
+                                for c in commits[:3]
+                            ]
+                        )
+                        logger.debug(f"    ✓ Fetched {fetched} commits")
+                    else:
+                        logger.debug(f"    ⚠ Commits API returned {response.status_code}")
 
                 # Get recent PRs
-                response = httpx.get(
-                    f"https://api.github.com/repos/{repo}/pulls",
-                    headers=headers,
-                    params={"state": "all", "per_page": 5},
-                    timeout=10,
-                )
-                if response.status_code == 200:
-                    prs = response.json()
-                    fetched = len(prs[:3])
-                    context["prs"].extend(
-                        [
-                            {
-                                "title": pr.get("title", ""),
-                                "number": pr.get("number", 0),
-                                "state": pr.get("state", ""),
-                                "repo": repo,
-                                "url": pr.get("html_url", ""),
-                                "author": pr.get("user", {}).get("login", "Unknown"),
-                            }
-                            for pr in prs[:3]
-                        ]
+                if include_prs:
+                    response = httpx.get(
+                        f"https://api.github.com/repos/{repo}/pulls",
+                        headers=headers,
+                        params={"state": "all", "per_page": 5},
+                        timeout=10,
                     )
-                    logger.debug(f"    ✓ Fetched {fetched} PRs")
-                else:
-                    logger.debug(f"    ⚠ PRs API returned {response.status_code}")
+                    if response.status_code == 200:
+                        prs = response.json()
+                        fetched = len(prs[:3])
+                        context["prs"].extend(
+                            [
+                                {
+                                    "title": pr.get("title", ""),
+                                    "number": pr.get("number", 0),
+                                    "state": pr.get("state", ""),
+                                    "repo": repo,
+                                    "url": pr.get("html_url", ""),
+                                    "author": pr.get("user", {}).get("login", "Unknown"),
+                                }
+                                for pr in prs[:3]
+                            ]
+                        )
+                        logger.debug(f"    ✓ Fetched {fetched} PRs")
+                    else:
+                        logger.debug(f"    ⚠ PRs API returned {response.status_code}")
 
                 # Get recent issues
-                response = httpx.get(
-                    f"https://api.github.com/repos/{repo}/issues",
-                    headers=headers,
-                    params={"state": "all", "per_page": 5},
-                    timeout=10,
-                )
-                if response.status_code == 200:
-                    issues = response.json()
-                    issues_filtered = [i for i in issues[:3] if not i.get("pull_request")]
-                    fetched = len(issues_filtered)
-                    context["issues"].extend(
-                        [
-                            {
-                                "title": i.get("title", ""),
-                                "number": i.get("number", 0),
-                                "repo": repo,
-                                "url": i.get("html_url", ""),
-                                "labels": [label.get("name", "") for label in i.get("labels", [])],
-                            }
-                            for i in issues_filtered
-                        ]
+                if include_issues:
+                    response = httpx.get(
+                        f"https://api.github.com/repos/{repo}/issues",
+                        headers=headers,
+                        params={"state": "all", "per_page": 5},
+                        timeout=10,
                     )
-                    logger.debug(f"    ✓ Fetched {fetched} issues")
-                else:
-                    logger.debug(f"    ⚠ Issues API returned {response.status_code}")
+                    if response.status_code == 200:
+                        issues = response.json()
+                        issues_filtered = [i for i in issues[:3] if not i.get("pull_request")]
+                        fetched = len(issues_filtered)
+                        context["issues"].extend(
+                            [
+                                {
+                                    "title": i.get("title", ""),
+                                    "number": i.get("number", 0),
+                                    "repo": repo,
+                                    "url": i.get("html_url", ""),
+                                    "labels": [
+                                        label.get("name", "") for label in i.get("labels", [])
+                                    ],
+                                }
+                                for i in issues_filtered
+                            ]
+                        )
+                        logger.debug(f"    ✓ Fetched {fetched} issues")
+                    else:
+                        logger.debug(f"    ⚠ Issues API returned {response.status_code}")
 
             except httpx.TimeoutException:
                 logger.error(f"  Timeout fetching data from {repo}")
@@ -2406,6 +2447,29 @@ Examples:
         help="Generate messages using OpenRouter (auto-selects best model, requires OPENROUTER_API_KEY)",
     )
     parser.add_argument(
+        "--model",
+        type=str,
+        default="openrouter/auto",
+        help="OpenRouter model for AI generation (default: openrouter/auto, see https://openrouter.ai/models)",
+    )
+    parser.add_argument(
+        "--use-github",
+        action="store_true",
+        help="Include GitHub context (commits, PRs, issues) in AI message generation (requires gh CLI or GITHUB_TOKEN)",
+    )
+    parser.add_argument(
+        "--github-token",
+        type=str,
+        default=None,
+        help="GitHub API token (overrides GITHUB_TOKEN env var and gh CLI)",
+    )
+    parser.add_argument(
+        "--github-limit",
+        type=int,
+        default=5,
+        help="Maximum repositories to fetch GitHub context from (default: 5)",
+    )
+    parser.add_argument(
         "--debug-auth",
         action="store_true",
         help="Print safe (redacted) Slack request/response diagnostics on failures",
@@ -2446,7 +2510,27 @@ def main() -> None:
     # Try AI generation if requested
     messages: list[dict[str, Any]] | None = None
     if args.use_ai:
-        github_context = get_github_context(env)
+        # Determine GitHub context settings from CLI args and config
+        use_github = args.use_github
+        github_token = args.github_token
+        github_limit = args.github_limit
+
+        # Override with config values if present (config takes precedence unless CLI explicitly set)
+        if unified_config_obj and unified_config_obj.ai and unified_config_obj.ai.github:
+            gh_cfg = unified_config_obj.ai.github
+            if not args.use_github and gh_cfg.enabled:
+                use_github = True
+            if not args.github_token and gh_cfg.token:
+                github_token = gh_cfg.token
+            if args.github_limit == 5 and gh_cfg.limit != 5:
+                github_limit = gh_cfg.limit
+
+        github_context = get_github_context(
+            env,
+            enabled=use_github,
+            token=github_token,
+            limit=github_limit,
+        )
         ai_config = unified_config_obj.ai if unified_config_obj else None
         messages = generate_messages_with_ai(env, ai_config, github_context)
         if not messages:

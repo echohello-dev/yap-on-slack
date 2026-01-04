@@ -6,16 +6,11 @@ from unittest.mock import patch
 
 import pytest
 
-from yap_on_slack.post_messages import (
-    AIConfigModel,
-    CredentialsConfigModel,
-    MessageConfigModel,
-    UnifiedConfig,
-    UserConfigModel,
-    WorkspaceConfigModel,
-    discover_config_file,
-    load_unified_config,
-)
+from yap_on_slack.post_messages import (AIConfigModel, CredentialsConfigModel,
+                                        MessageConfigModel, UnifiedConfig,
+                                        UserConfigModel, WorkspaceConfigModel,
+                                        discover_config_file,
+                                        load_unified_config)
 
 
 class TestWorkspaceConfigModel:
@@ -448,3 +443,126 @@ workspace:
 
             with pytest.raises(ValueError, match="Invalid config.yaml"):
                 load_unified_config(config_file)
+
+
+class TestGitHubConfigModel:
+    """Test GitHub configuration model."""
+
+    def test_valid_github_config(self):
+        """Test valid GitHub configuration."""
+        from yap_on_slack.post_messages import GitHubConfigModel
+
+        config = GitHubConfigModel(
+            enabled=True,
+            token="ghp_test_token",
+            limit=10,
+            include_commits=True,
+            include_prs=True,
+            include_issues=False,
+        )
+        assert config.enabled is True
+        assert config.token == "ghp_test_token"
+        assert config.limit == 10
+        assert config.include_commits is True
+        assert config.include_prs is True
+        assert config.include_issues is False
+
+    def test_github_config_defaults(self):
+        """Test GitHub configuration defaults."""
+        from yap_on_slack.post_messages import GitHubConfigModel
+
+        config = GitHubConfigModel()
+        assert config.enabled is True
+        assert config.token is None
+        assert config.limit == 5
+        assert config.include_commits is True
+        assert config.include_prs is True
+        assert config.include_issues is True
+
+    def test_ai_config_with_github(self):
+        """Test AI configuration with nested GitHub config."""
+        from yap_on_slack.post_messages import GitHubConfigModel
+
+        github_config = GitHubConfigModel(enabled=True, limit=10)
+        ai_config = AIConfigModel(
+            enabled=True,
+            model="openrouter/auto",
+            github=github_config,
+        )
+        assert ai_config.github is not None
+        assert ai_config.github.enabled is True
+        assert ai_config.github.limit == 10
+
+    def test_unified_config_with_github(self):
+        """Test unified configuration with GitHub config."""
+
+        config_data = {
+            "workspace": {
+                "org_url": "https://test.slack.com",
+                "channel_id": "C123",
+                "team_id": "T123",
+            },
+            "credentials": {
+                "xoxc_token": "xoxc_test",
+                "xoxd_token": "xoxd_test",
+            },
+            "ai": {
+                "enabled": True,
+                "github": {
+                    "enabled": True,
+                    "token": "ghp_test",
+                    "limit": 10,
+                },
+            },
+            "github": {
+                "enabled": True,
+                "limit": 5,
+            },
+        }
+
+        config = UnifiedConfig(**config_data)
+        assert config.ai.github is not None
+        assert config.ai.github.enabled is True
+        assert config.ai.github.token == "ghp_test"
+        assert config.ai.github.limit == 10
+        assert config.github is not None
+        assert config.github.enabled is True
+        assert config.github.limit == 5
+
+    def test_load_config_with_github(self):
+        """Test loading configuration with GitHub settings."""
+        config_content = """
+workspace:
+  org_url: https://test.slack.com
+  channel_id: C0123456789
+  team_id: T0123456789
+
+credentials:
+  xoxc_token: xoxc-test-token
+  xoxd_token: xoxd-test-token
+
+ai:
+  enabled: true
+  model: openrouter/auto
+  github:
+    enabled: true
+    token: ghp_test_token
+    limit: 10
+    include_commits: true
+    include_prs: true
+    include_issues: false
+
+github:
+  enabled: true
+  limit: 5
+"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            config_file = tmpdir_path / "config.yaml"
+            config_file.write_text(config_content)
+
+            app_config, env = load_unified_config(config_file)
+
+            # Verify GitHub config was loaded
+            assert app_config is not None

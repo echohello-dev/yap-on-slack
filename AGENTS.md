@@ -37,6 +37,9 @@ yos run                                    # Post messages
 yos run -i                                 # Interactive channel selector
 yos run --dry-run                          # Validate without posting
 yos run --use-ai                           # Generate AI messages
+yos run --use-ai --use-github              # Generate AI messages with GitHub context
+yos run --use-ai --github-token <token>    # Use specific GitHub token
+yos run --use-ai --github-limit 10         # Fetch up to 10 repos
 yos scan -i                                # Scan channel and generate prompts
 
 # Development (use mise run)
@@ -61,7 +64,28 @@ credentials:
   xoxc_token: xoxc-token-here
   xoxd_token: xoxd-token-here
 
-# Optional: multiple users, AI settings, messages
+# Optional: AI settings with GitHub integration
+ai:
+  openrouter_api_key: your-key-here
+  model: anthropic/claude-3-sonnet
+  github:
+    enabled: true
+    token: ghp_xxxxxxxxxxxx  # optional, falls back to env var
+    limit: 5                  # max repos to fetch
+    include_commits: true
+    include_prs: true
+    include_issues: true
+
+# Alternatively, GitHub config can be at top level:
+github:
+  enabled: true
+  token: ghp_xxxxxxxxxxxx
+  limit: 5
+  include_commits: true
+  include_prs: true
+  include_issues: true
+
+# Optional: multiple users, messages
 # See config.yaml.example for full structure
 ```
 
@@ -87,6 +111,7 @@ credentials:
    - Update [README.md](README.md) if user-facing feature
    - Update [docs/usage.md](docs/usage.md) for detailed usage/troubleshooting
    - Update [config.yaml.example](config.yaml.example) for new config options
+   - Update [schema/config.schema.json](schema/config.schema.json) if adding/modifying config fields
    - Consider adding ADR to [docs/adrs/](docs/adrs/) for significant decisions
 5. **Test end-to-end**: `yos run --dry-run` to validate integration
 

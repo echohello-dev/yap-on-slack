@@ -276,6 +276,15 @@ ai:
   # system_prompt: |  # Optional: override default prompt
   #   Your custom system prompt here
   # Default: yap_on_slack/prompts/generate_messages.txt
+  
+  # GitHub context integration (optional)
+  github:
+    enabled: true  # Enable GitHub context when available
+    token: ""  # Optional: explicit GitHub token (overrides GITHUB_TOKEN env var)
+    limit: 5  # Max repositories to fetch from
+    include_commits: true  # Include recent commits
+    include_prs: true  # Include recent PRs
+    include_issues: true  # Include recent issues
 
 # Channel scanning settings (for `yos scan` command)
 scan:
@@ -285,6 +294,15 @@ scan:
   model: openrouter/auto                    # LLM for prompt generation
   export_data: true                         # Export messages to text file
   # Default system prompt: yap_on_slack/prompts/generate_channel_prompts.txt
+
+# GitHub integration (top-level, optional)
+github:
+  enabled: true  # Enable GitHub context globally
+  token: ""  # Optional: explicit GitHub token
+  limit: 5  # Max repositories to fetch from
+  include_commits: true
+  include_prs: true
+  include_issues: true
 ```
 
 ### Environment Variables
@@ -304,9 +322,11 @@ export SLACK_XOXD_TOKEN=xoxd-...
 # AI generation
 export OPENROUTER_API_KEY=sk-or-v1-...
 
+# GitHub integration (optional)
+export GITHUB_TOKEN=ghp_...  # For AI to reference your repos
+
 # Optional
 export LOG_LEVEL=INFO  # DEBUG, INFO, WARNING, ERROR
-export GITHUB_TOKEN=ghp_...  # For AI to reference your repos
 ```
 
 > **Note**: Environment variables take precedence over config file values.
@@ -511,8 +531,17 @@ yos run --use-ai
 # Use specific LLM model
 yos run --use-ai --model google/gemini-2.5-flash
 
-# Combine with other options
-yos run --use-ai --model grok-2 --limit 10 --dry-run
+# Include GitHub context (commits, PRs, issues)
+yos run --use-ai --use-github
+
+# Use specific GitHub token
+yos run --use-ai --github-token ghp_xxxxxxxxxxxx
+
+# Limit GitHub context to 10 repos
+yos run --use-ai --github-limit 10
+
+# Combine all options
+yos run --use-ai --model grok-2 --use-github --github-limit 5 --limit 10 --dry-run
 ```
 
 **Setup:**
@@ -523,20 +552,54 @@ yos run --use-ai --model grok-2 --limit 10 --dry-run
      enabled: false
      model: openrouter/auto
      api_key: sk-or-v1-...
+     # GitHub context integration
+     github:
+       enabled: true
+       token: ""  # Optional: explicit token
+       limit: 5
+       include_commits: true
+       include_prs: true
+       include_issues: true
    ```
    Or:
    ```bash
    export OPENROUTER_API_KEY=sk-or-v1-...
+   export GITHUB_TOKEN=ghp_...
    ```
 
 **What AI generates:**
 - **Varied tones**: From casual ("yo anyone know why ci is failing lol") to formal announcements ("[ACTION REQUIRED]...")
 - **Varied lengths**: One-word reactions (":+1:", "thx") to detailed bug reports with code blocks
-- **GitHub-aware**: References real PRs, commits, and issues from your repos (if `gh` CLI is authenticated)
+- **GitHub-aware**: References real PRs, commits, and issues from your repos
 - **Workflow errors**: Realistic CI/CD failures, build errors, deployment issues
 - **Rich formatting**: Bullet points, numbered lists, code blocks, blockquotes, slackmoji
 - **Natural conversations**: Multi-reply threads with debugging back-and-forth
 - **Reactions**: AI suggests appropriate emoji reactions for messages
+
+**GitHub Context Integration:**
+When enabled with `--use-github` or `github.enabled: true` in config:
+- Fetches recent commits from your repositories
+- Includes PR titles, numbers, and states
+- Adds issue titles, labels, and status
+- References actual GitHub URLs in generated messages
+- Uses explicit GitHub token if provided, otherwise tries `gh CLI` or `GITHUB_TOKEN` env var
+
+**GitHub Control Options:**
+- `--use-github` — Enable GitHub context (requires token)
+- `--github-token <token>` — Use specific GitHub token (overrides env var and gh CLI)
+- `--github-limit <count>` — Max repos to fetch (default: 5)
+
+Configure GitHub behavior in `config.yaml`:
+```yaml
+ai:
+  github:
+    enabled: true                # Enable/disable GitHub context
+    token: ""                    # Optional explicit token
+    limit: 5                     # Max repositories
+    include_commits: true        # Include commits
+    include_prs: true           # Include PRs
+    include_issues: true        # Include issues
+```
 
 **GitHub Context:**
 If you have `gh` CLI installed and authenticated, or set `GITHUB_TOKEN`, the AI will reference your actual repositories:

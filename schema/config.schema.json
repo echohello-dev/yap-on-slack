@@ -246,7 +246,7 @@
                 },
                 "system_prompt": {
                     "type": "string",
-                    "description": "Custom system prompt for AI generation (overrides default). Default prompt: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/post_messages.py#L49",
+                    "description": "Custom system prompt for AI generation (overrides default). Default prompt: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/prompts/generate_messages.txt",
                     "examples": [
                         "Generate realistic engineering team Slack messages about infrastructure issues..."
                     ]
@@ -293,6 +293,49 @@
                 "export_data": {
                     "type": "boolean",
                     "description": "Export messages, threads, and reactions to text file",
+                    "default": true
+                }
+            },
+            "additionalProperties": false
+        },
+        "github": {
+            "type": "object",
+            "description": "GitHub context integration for AI message generation (optional)",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable GitHub context when generating AI messages",
+                    "default": true
+                },
+                "token": {
+                    "type": "string",
+                    "description": "GitHub personal access token (can also use GITHUB_TOKEN env var)",
+                    "pattern": "^(ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{82})$",
+                    "examples": [
+                        "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+                        "github_pat_11A..."
+                    ]
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of repositories to fetch context from",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 5
+                },
+                "include_commits": {
+                    "type": "boolean",
+                    "description": "Include recent commits in AI context",
+                    "default": true
+                },
+                "include_prs": {
+                    "type": "boolean",
+                    "description": "Include recent pull requests in AI context",
+                    "default": true
+                },
+                "include_issues": {
+                    "type": "boolean",
+                    "description": "Include recent issues in AI context",
                     "default": true
                 }
             },

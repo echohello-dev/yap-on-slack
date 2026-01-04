@@ -80,9 +80,7 @@ ai:
   max_tokens: 4000
   # system_prompt: |                  # Optional: override default prompt
   #   Your custom prompt here
-  # Default: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/post_messages.py#L49
-  temperature: 0.7
-  max_tokens: 4000
+  # Default: https://github.com/echohello-dev/yap-on-slack/blob/main/yap_on_slack/prompts/generate_messages.txt
 """
 
     # Write config file
@@ -276,6 +274,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         new_argv.append("--use-ai")
     if args.model != "openrouter/auto":  # Only add if not default
         new_argv.extend(["--model", args.model])
+    if args.use_github:
+        new_argv.append("--use-github")
+    if args.github_token:
+        new_argv.extend(["--github-token", args.github_token])
+    if args.github_limit != 5:  # Only add if not default
+        new_argv.extend(["--github-limit", str(args.github_limit)])
     if args.debug_auth:
         new_argv.append("--debug-auth")
 
@@ -800,6 +804,23 @@ Commands can also be invoked as:
         type=str,
         default="openrouter/auto",
         help="OpenRouter model for AI generation (default: openrouter/auto, see https://openrouter.ai/models)",
+    )
+    run_parser.add_argument(
+        "--use-github",
+        action="store_true",
+        help="Include GitHub context (commits, PRs, issues) in AI message generation (requires gh CLI or GITHUB_TOKEN)",
+    )
+    run_parser.add_argument(
+        "--github-token",
+        type=str,
+        default=None,
+        help="GitHub API token (overrides GITHUB_TOKEN env var and gh CLI)",
+    )
+    run_parser.add_argument(
+        "--github-limit",
+        type=int,
+        default=5,
+        help="Maximum repositories to fetch GitHub context from (default: 5)",
     )
     run_parser.add_argument(
         "--debug-auth",
