@@ -297,7 +297,8 @@ ai:
 # Channel scanning settings (for `yos scan` command)
 scan:
   limit: 200                                # Max messages to fetch (10-5000)
-  throttle: 0.5                             # Delay between API batches in seconds
+  throttle: 1.5                             # Delay between API batches in seconds (default: 1.5)
+  throttle_range: 0.5                       # Randomization range ±N seconds (default: 0.5)
   output_dir: ~/.config/yap-on-slack/scan   # Where to save prompts
   model: openrouter/auto                    # LLM for prompt generation
   export_data: true                         # Export messages to text file
@@ -663,7 +664,8 @@ yos scan --channel-id C123ABC --model grok-2
 # Configure scan settings in config.yaml
 # scan:
 #   limit: 200
-#   throttle: 0.5
+#   throttle: 1.5
+#   throttle_range: 0.5
 #   output_dir: ~/.config/yap-on-slack/scan
 #   model: openrouter/auto
 #   export_data: true
@@ -880,7 +882,56 @@ yos run --verbose
 # Increase timeout (edit post_messages.py if needed)
 ```
 
-#### 5. Rate Limiting
+#### 5. Throttling Configuration (for `yos scan`)
+
+**Overview:**
+Throttling controls the delay between API calls when fetching channel messages. Proper throttling prevents rate limiting and simulates natural interaction patterns.
+
+**Key Parameters:**
+- `--throttle SECONDS` - Base delay between API call batches (default: 1.5s)
+- `--throttle-range SECONDS` - Randomization range ±N seconds (default: ±0.5s)
+- Config file: `scan.throttle` and `scan.throttle_range`
+
+**How Throttling Works:**
+- Base throttle: 1.5s (wait 1.5 seconds between batches)
+- Range: ±0.5s (adds random variation: 1.0s to 2.0s)
+- Minimum wait: 0.1s (enforced safety floor)
+- Maximum wait: 60s (timeout protection)
+
+**Examples:**
+```bash
+# Default: 1.5s ± 0.5s (varies each batch from 1.0s to 2.0s)
+yos scan --channel-id C123ABC
+
+# No randomization: exactly 2.0s between batches
+yos scan --channel-id C123ABC --throttle 2.0 --throttle-range 0
+
+# More conservative: 3.0s ± 1.0s (varies from 2.0s to 4.0s)
+yos scan --channel-id C123ABC --throttle 3.0 --throttle-range 1.0
+
+# Via config.yaml:
+# scan:
+#   throttle: 2.5
+#   throttle_range: 0.75
+```
+
+**When to Adjust Throttling:**
+
+| Scenario | Recommended | Why |
+|----------|-------------|-----|
+| **Rate Limited (429 errors)** | Increase throttle to 2.0-3.0s | More time between requests |
+| **Large channels (5000+ msgs)** | Use 2.0s or more | More requests = more rate limit risk |
+| **Corporate/Slow Network** | Use 2.0s+ | Network latency adds to delays |
+| **Fast, Small Channels** | Can reduce to 1.0s | Fewer requests = lower rate limit risk |
+| **Natural Interaction Feel** | Keep randomization enabled | ±0.5s makes it look organic |
+
+**Rate Limit Handling:**
+If you hit rate limits, the tool will:
+1. Detect HTTP 429 / `ratelimited` error
+2. Print: "Rate limited. Try --throttle 2.0 or wait X seconds"
+3. Retry with exponential backoff (up to 3 attempts)
+
+#### 6. Rate Limiting
 
 **Error:** `SlackRateLimitError` or HTTP 429
 
@@ -898,9 +949,12 @@ yos run --limit 5
 
 # Wait before retrying
 sleep 60 && yos run
+
+# For scanning: increase throttle between API batches
+yos scan --channel-id C123ABC --throttle 2.0 --throttle-range 0.5
 ```
 
-#### 6. SSL/TLS Certificate Errors
+#### 7. SSL/TLS Certificate Errors
 
 **Error:** `SSLError`, `SSL: CERTIFICATE_VERIFY_FAILED`, or `ssl.VERIFY_X509_STRICT`
 

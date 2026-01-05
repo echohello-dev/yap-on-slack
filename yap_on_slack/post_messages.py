@@ -381,7 +381,8 @@ class ScanConfigModel(BaseModel):
     """Channel scanning settings from config file."""
 
     limit: int = 200
-    throttle: float = 0.5
+    throttle: float = 1.5  # Default delay in seconds between API batches
+    throttle_range: float = 0.5  # Randomization range (±0.5s)
     output_dir: str | None = None
     model: str = "openrouter/auto"
     export_data: bool = True
@@ -965,6 +966,7 @@ def load_unified_config(config_path: Path | None = None) -> tuple[AppConfig, dic
         scan = unified_config.scan
         env["_SCAN_LIMIT"] = str(scan.limit)
         env["_SCAN_THROTTLE"] = str(scan.throttle)
+        env["_SCAN_THROTTLE_RANGE"] = str(scan.throttle_range)
         env["_SCAN_MODEL"] = scan.model
         env["_SCAN_EXPORT_DATA"] = "true" if scan.export_data else "false"
         if scan.output_dir:
@@ -1560,7 +1562,8 @@ def fetch_channel_messages(
     config: dict[str, str],
     channel_id: str,
     limit: int = 200,
-    throttle: float = 1.0,
+    throttle: float = 1.5,
+    throttle_range: float = 0.5,
     progress_callback: Any | None = None,
 ) -> dict[str, Any]:
     """Fetch messages from a Slack channel with replies and reactions.
@@ -1572,7 +1575,8 @@ def fetch_channel_messages(
         config: Configuration dictionary with Slack credentials
         channel_id: Channel ID to fetch messages from
         limit: Maximum number of messages to fetch
-        throttle: Delay in seconds between API call batches
+        throttle: Delay in seconds between API call batches (default: 1.5s)
+        throttle_range: Randomization range for throttle (default: ±0.5s)
         progress_callback: Optional callback(current, total, status) for progress updates
 
     Returns:
@@ -1670,7 +1674,7 @@ def fetch_channel_messages(
                 break
 
             # Only throttle between pagination requests
-            apply_throttle(throttle, randomize=True)
+            apply_throttle(throttle, randomize=True, randomization_range=throttle_range)
 
         except (httpx.TimeoutException, httpx.NetworkError) as e:
             logger.error(f"Network error fetching messages: {e}")
@@ -1773,7 +1777,7 @@ def fetch_channel_messages(
 
             # Throttle between batches (not between individual requests)
             if batch_start + batch_size < len(threaded_messages):
-                apply_throttle(throttle, randomize=True)
+                apply_throttle(throttle, randomize=True, randomization_range=throttle_range)
 
     # Sort reactions by count (exclude internal counter)
     filtered_reactions = {k: v for k, v in reaction_counts.items() if not k.startswith("_")}

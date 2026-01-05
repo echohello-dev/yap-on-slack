@@ -1,10 +1,7 @@
 """Tests for throttling, file naming, and export functionality."""
 
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from yap_on_slack.post_messages import apply_throttle
 

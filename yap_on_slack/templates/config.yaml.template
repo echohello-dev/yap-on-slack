@@ -108,7 +108,8 @@ ai:
 # Channel scanning settings (for `yos scan` command)
 # scan:
 #   limit: 200                                # Max messages to fetch (10-5000)
-#   throttle: 1.5                             # Delay between API batches in seconds (with ±0.5s randomization)
+#   throttle: 1.5                             # Delay between API batches in seconds (default: 1.5)
+#   throttle_range: 0.5                       # Randomization range ±N seconds (default: 0.5)
 #   output_dir: ~/.config/yap-on-slack/scan   # Where to save prompts and exports
 #   model: openrouter/auto                    # Model for prompt generation
 #   export_data: true                         # Export messages to text file

@@ -414,8 +414,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
     # Only use config defaults when CLI arg wasn't explicitly provided
     if env.get("_SCAN_LIMIT") and args.limit == 200:  # 200 is the argparse default
         args.limit = int(env["_SCAN_LIMIT"])
-    if env.get("_SCAN_THROTTLE") and args.throttle == 0.5:  # 0.5 is the argparse default
+    if env.get("_SCAN_THROTTLE") and args.throttle == 1.5:  # 1.5 is the argparse default
         args.throttle = float(env["_SCAN_THROTTLE"])
+    if env.get("_SCAN_THROTTLE_RANGE") and args.throttle_range == 0.5:  # 0.5 is the argparse default
+        args.throttle_range = float(env["_SCAN_THROTTLE_RANGE"])
     if env.get("_SCAN_MODEL") and args.model == "openrouter/auto":  # default
         args.model = env["_SCAN_MODEL"]
     if env.get("_SCAN_OUTPUT_DIR") and args.output_dir is None:
@@ -574,6 +576,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
                 channel_id,
                 limit=args.limit,
                 throttle=args.throttle,
+                throttle_range=args.throttle_range,
                 progress_callback=update_progress,
             )
             channel_data["name"] = channel_name
@@ -977,7 +980,13 @@ Commands can also be invoked as:
         "--throttle",
         type=float,
         default=1.5,
-        help="Delay between API call batches in seconds (default: 1.5, with randomization ±0.5s)",
+        help="Delay between API call batches in seconds (default: 1.5)",
+    )
+    scan_parser.add_argument(
+        "--throttle-range",
+        type=float,
+        default=0.5,
+        help="Randomization range for throttle in seconds (default: ±0.5s)",
     )
     scan_parser.add_argument(
         "--output-dir",
