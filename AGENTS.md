@@ -57,6 +57,11 @@ mise run test                              # Run pytest
 **Config file locations** (priority order):
 1. `--config` flag → 2. `.yos.yaml` → 3. `config.yaml` → 4. `~/.config/yap-on-slack/config.yaml`
 
+**Authentication Options:**
+- **Bot Token (xoxb-)** - Recommended for automation, CI/CD, never expires
+- **Session Tokens (xoxc/xoxd)** - Quick setup, user impersonation, expires frequently
+- **User OAuth (xoxp-)** - Production use, longer expiration
+
 **Minimal config structure** (see yap_on_slack/templates/config.yaml.template for full details):
 ```yaml
 workspace:
@@ -65,8 +70,12 @@ workspace:
   team_id: T0123456789
 
 credentials:
-  xoxc_token: xoxc-token-here
-  xoxd_token: xoxd-token-here
+  # Option 1: Bot token (recommended for automation)
+  bot_token: xoxb-your-bot-token-here
+  
+  # Option 2: Session tokens (for user impersonation)
+  # xoxc_token: xoxc-token-here
+  # xoxd_token: xoxd-token-here
 
 # Optional: AI settings with GitHub integration
 ai:
@@ -122,7 +131,7 @@ github:
 ```
 
 **Environment variables override config:**
-- `SLACK_XOXC_TOKEN`, `SLACK_XOXD_TOKEN`
+- `SLACK_XOXC_TOKEN`, `SLACK_XOXD_TOKEN`, `SLACK_BOT_TOKEN`
 - `SLACK_ORG_URL`, `SLACK_CHANNEL_ID`, `SLACK_TEAM_ID`
 - `OPENROUTER_API_KEY`, `GITHUB_TOKEN`
 

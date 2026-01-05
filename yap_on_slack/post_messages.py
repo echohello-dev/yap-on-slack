@@ -277,6 +277,7 @@ class CredentialsConfigModel(BaseModel):
     xoxc_token: str | None = None
     xoxd_token: str | None = None
     cookies: str | None = None
+    bot_token: str | None = None  # Slack bot token (xoxb-)
 
 
 class SSLConfigModel(BaseModel):
@@ -301,9 +302,10 @@ class UserConfigModel(BaseModel):
     """User configuration with credentials."""
 
     name: str
-    xoxc_token: str
-    xoxd_token: str
+    xoxc_token: str | None = None
+    xoxd_token: str | None = None
     cookies: str | None = None
+    bot_token: str | None = None  # Slack bot token (xoxb-)
 
     @field_validator("name")
     @classmethod
@@ -311,6 +313,21 @@ class UserConfigModel(BaseModel):
         if not v or not v.strip():
             raise ValueError("User name cannot be empty")
         return v
+
+    def model_post_init(self, __context: Any) -> None:
+        """Validate that either session tokens or bot token is provided."""
+        has_session_tokens = bool(self.xoxc_token and self.xoxd_token)
+        has_bot_token = bool(self.bot_token)
+
+        if not has_session_tokens and not has_bot_token:
+            raise ValueError(
+                f"User '{self.name}' must have either session tokens (xoxc_token + xoxd_token) "
+                "or bot_token"
+            )
+        if has_session_tokens and has_bot_token:
+            raise ValueError(
+                f"User '{self.name}' cannot have both session tokens and bot_token; use one or the other"
+            )
 
 
 class MessageReplyConfigModel(BaseModel):
@@ -461,12 +478,13 @@ class Message(BaseModel):
 
 
 class SlackUser(BaseModel):
-    """A Slack user session (xoxc/xoxd) used to post messages."""
+    """A Slack user session (xoxc/xoxd) or bot token used to post messages."""
 
     name: str
-    SLACK_XOXC_TOKEN: str
-    SLACK_XOXD_TOKEN: str
+    SLACK_XOXC_TOKEN: str | None = None
+    SLACK_XOXD_TOKEN: str | None = None
     SLACK_COOKIES: str | None = None
+    SLACK_BOT_TOKEN: str | None = None  # Bot token (xoxb-)
 
     @field_validator("name")
     @classmethod
@@ -474,6 +492,21 @@ class SlackUser(BaseModel):
         if not v or not v.strip():
             raise ValueError("User name cannot be empty")
         return v
+
+    def model_post_init(self, __context: Any) -> None:
+        """Validate that either session tokens or bot token is provided."""
+        has_session_tokens = bool(self.SLACK_XOXC_TOKEN and self.SLACK_XOXD_TOKEN)
+        has_bot_token = bool(self.SLACK_BOT_TOKEN)
+
+        if not has_session_tokens and not has_bot_token:
+            raise ValueError(
+                f"User '{self.name}' must have either session tokens (SLACK_XOXC_TOKEN + SLACK_XOXD_TOKEN) "
+                "or SLACK_BOT_TOKEN"
+            )
+        if has_session_tokens and has_bot_token:
+            raise ValueError(
+                f"User '{self.name}' cannot have both session tokens and bot token; use one or the other"
+            )
 
 
 class SlackWorkspace(BaseModel):
@@ -548,11 +581,19 @@ def _merge_request_config(app_config: AppConfig, user: SlackUser) -> dict[str, s
         "SLACK_ORG_URL": app_config.workspace.SLACK_ORG_URL,
         "SLACK_CHANNEL_ID": app_config.workspace.SLACK_CHANNEL_ID,
         "SLACK_TEAM_ID": app_config.workspace.SLACK_TEAM_ID,
-        "SLACK_XOXC_TOKEN": user.SLACK_XOXC_TOKEN,
-        "SLACK_XOXD_TOKEN": user.SLACK_XOXD_TOKEN,
     }
-    if user.SLACK_COOKIES:
-        merged["SLACK_COOKIES"] = user.SLACK_COOKIES
+
+    # Add authentication (either session tokens or bot token)
+    if user.SLACK_BOT_TOKEN:
+        merged["SLACK_BOT_TOKEN"] = user.SLACK_BOT_TOKEN
+    else:
+        if user.SLACK_XOXC_TOKEN:
+            merged["SLACK_XOXC_TOKEN"] = user.SLACK_XOXC_TOKEN
+        if user.SLACK_XOXD_TOKEN:
+            merged["SLACK_XOXD_TOKEN"] = user.SLACK_XOXD_TOKEN
+        if user.SLACK_COOKIES:
+            merged["SLACK_COOKIES"] = user.SLACK_COOKIES
+
     return merged
 
 
@@ -579,8 +620,42 @@ def _build_slack_cookies(config: dict[str, str]) -> dict[str, str]:
 
     # Always set/override the auth cookie `d` from SLACK_XOXD_TOKEN.
     # Use the token directly - do not URL-decode as Slack expects the original value
-    cookies["d"] = config["SLACK_XOXD_TOKEN"]
+    xoxd_token = config.get("SLACK_XOXD_TOKEN")
+    if xoxd_token:
+        cookies["d"] = xoxd_token
     return cookies
+
+
+def _is_bot_token_auth(config: dict[str, str]) -> bool:
+    """Check if config uses bot token authentication.
+
+    Args:
+        config: Configuration dictionary
+
+    Returns:
+        True if bot token is present, False otherwise
+    """
+    return bool(config.get("SLACK_BOT_TOKEN"))
+
+
+def _build_auth_headers(config: dict[str, str]) -> dict[str, str]:
+    """Build authentication headers for Slack API.
+
+    For bot tokens: Use Authorization Bearer header
+    For session tokens: Use form data with xoxc token
+
+    Args:
+        config: Configuration dictionary
+
+    Returns:
+        Headers dict with authentication
+    """
+    headers = dict(_DEFAULT_HEADERS)
+
+    if _is_bot_token_auth(config):
+        headers["Authorization"] = f"Bearer {config['SLACK_BOT_TOKEN']}"
+
+    return headers
 
 
 def create_ssl_context(ssl_config: SSLConfigModel | None = None) -> bool | ssl.SSLContext:
@@ -817,6 +892,7 @@ def load_unified_config(config_path: Path | None = None) -> tuple[AppConfig, dic
         "SLACK_XOXC_TOKEN",
         "SLACK_XOXD_TOKEN",
         "SLACK_COOKIES",
+        "SLACK_BOT_TOKEN",
         "SLACK_ORG_URL",
         "SLACK_CHANNEL_ID",
         "SLACK_TEAM_ID",
@@ -892,6 +968,7 @@ def load_unified_config(config_path: Path | None = None) -> tuple[AppConfig, dic
     default_xoxc = env.get("SLACK_XOXC_TOKEN")
     default_xoxd = env.get("SLACK_XOXD_TOKEN")
     default_cookies = env.get("SLACK_COOKIES")
+    default_bot_token = env.get("SLACK_BOT_TOKEN")
     default_user_name = env.get("SLACK_USER_NAME", "default")
 
     # If not in env, check config file credentials
@@ -902,15 +979,25 @@ def load_unified_config(config_path: Path | None = None) -> tuple[AppConfig, dic
             default_xoxd = unified_config.credentials.xoxd_token
         if not default_cookies and unified_config.credentials.cookies:
             default_cookies = unified_config.credentials.cookies
+        if not default_bot_token:
+            default_bot_token = unified_config.credentials.bot_token
 
-    # Validate we have default credentials
-    if not default_xoxc or not default_xoxd:
+    # Validate we have default credentials (either session tokens or bot token)
+    has_session_tokens = bool(default_xoxc and default_xoxd)
+    has_bot_token = bool(default_bot_token)
+
+    if not has_session_tokens and not has_bot_token:
         console.print("[bold red]✗ Missing required credentials:[/bold red]")
+        console.print(
+            "  [red]Either provide session tokens (xoxc + xoxd) OR bot token (xoxb)[/red]"
+        )
         if not default_xoxc:
-            console.print("  [red]- SLACK_XOXC_TOKEN or credentials.xoxc_token[/red]")
+            console.print("  [dim]- SLACK_XOXC_TOKEN or credentials.xoxc_token[/dim]")
         if not default_xoxd:
-            console.print("  [red]- SLACK_XOXD_TOKEN or credentials.xoxd_token[/red]")
-        raise ValueError("Missing required credentials (xoxc_token and xoxd_token)")
+            console.print("  [dim]- SLACK_XOXD_TOKEN or credentials.xoxd_token[/dim]")
+        if not default_bot_token:
+            console.print("  [dim]- SLACK_BOT_TOKEN or credentials.bot_token[/dim]")
+        raise ValueError("Missing required credentials (session tokens OR bot token)")
 
     # Add default user
     users.append(
@@ -919,6 +1006,7 @@ def load_unified_config(config_path: Path | None = None) -> tuple[AppConfig, dic
             SLACK_XOXC_TOKEN=default_xoxc,
             SLACK_XOXD_TOKEN=default_xoxd,
             SLACK_COOKIES=default_cookies,
+            SLACK_BOT_TOKEN=default_bot_token,
         )
     )
     default_user = default_user_name
@@ -936,6 +1024,7 @@ def load_unified_config(config_path: Path | None = None) -> tuple[AppConfig, dic
                     SLACK_XOXC_TOKEN=user_config.xoxc_token,
                     SLACK_XOXD_TOKEN=user_config.xoxd_token,
                     SLACK_COOKIES=user_config.cookies,
+                    SLACK_BOT_TOKEN=user_config.bot_token,
                 )
             )
         strategy = unified_config.user_strategy
@@ -1327,73 +1416,136 @@ def add_reaction(channel: str, timestamp: str, emoji: str, config: dict[str, str
     """
     logger.debug(f"Adding reaction :{emoji}: to message {timestamp}")
 
-    data = {
-        "token": config["SLACK_XOXC_TOKEN"],
-        "channel": channel,
-        "timestamp": timestamp,
-        "name": emoji,
-    }
+    use_bot_token = _is_bot_token_auth(config)
 
-    cookies = _build_slack_cookies(config)
+    if use_bot_token:
+        # Bot token: Use standard Web API with JSON payload
+        headers = _build_auth_headers(config)
+        headers["Content-Type"] = "application/json"
 
-    try:
-        response = _http_post(
-            f"{config['SLACK_ORG_URL']}/api/reactions.add",
-            data=data,
-            cookies=cookies,
-            headers=_DEFAULT_HEADERS,
-            timeout=5,
-        )
-        result: dict[str, Any] = response.json()
+        payload = {
+            "channel": channel,
+            "timestamp": timestamp,
+            "name": emoji,
+        }
 
-        if result.get("ok"):
-            logger.debug(f"Successfully added reaction :{emoji}:")
-            return True
-
-        error = result.get("error", "unknown")
-
-        # Optional auth debugging (no secrets)
-        if config.get("__DEBUG_AUTH") == "1":
-            _print_auth_debug(
-                endpoint="reactions.add",
-                config=config,
-                response=response,
-                slack_result=result,
+        try:
+            response = _http_post(
+                "https://slack.com/api/reactions.add",
+                json_data=payload,
+                headers=headers,
+                timeout=5,
             )
+            result: dict[str, Any] = response.json()
 
-        # Handle rate limiting
-        if error == "ratelimited":
-            retry_after = response.headers.get("Retry-After", "60")
-            logger.warning(f"Rate limited on reactions.add, retry after {retry_after}s")
-            raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
+            if result.get("ok"):
+                logger.debug(f"Successfully added reaction :{emoji}:")
+                return True
 
-        # Handle invalid emoji
-        if error == "invalid_name":
-            logger.warning(f"Invalid emoji name: {emoji}")
+            error = result.get("error", "unknown")
+
+            # Handle rate limiting
+            if error == "ratelimited":
+                retry_after = response.headers.get("Retry-After", "60")
+                logger.warning(f"Rate limited on reactions.add, retry after {retry_after}s")
+                raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
+
+            # Handle invalid emoji
+            if error == "invalid_name":
+                logger.warning(f"Invalid emoji name: {emoji}")
+                return False
+
+            # Handle already reacted
+            if error == "already_reacted":
+                logger.debug(f"Already reacted with :{emoji}:")
+                return True
+
+            logger.warning(f"Failed to add reaction: {error}")
             return False
 
-        # Handle already reacted
-        if error == "already_reacted":
-            logger.debug(f"Already reacted with :{emoji}:")
-            return True
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            logger.error(f"Network error adding reaction: {e}")
+            raise SlackNetworkError(f"Network error: {e}") from e
+        except (SlackRateLimitError, SlackAPIError):
+            raise
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Slack API response: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error adding reaction: {e}")
+            return False
 
-        logger.warning(f"Failed to add reaction: {error}")
-        return False
+    else:
+        # Session token: Use webapp API with form data
+        data = {
+            "token": config["SLACK_XOXC_TOKEN"],
+            "channel": channel,
+            "timestamp": timestamp,
+            "name": emoji,
+        }
 
-    except (httpx.TimeoutException, httpx.NetworkError) as e:
-        logger.error(f"Network error adding reaction: {e}")
-        if config.get("__DEBUG_AUTH") == "1":
-            _print_auth_debug(endpoint="reactions.add", config=config, note=f"network_error: {e}")
-        raise SlackNetworkError(f"Network error: {e}") from e
-    except (SlackRateLimitError, SlackAPIError):
-        # Re-raise our custom exceptions
-        raise
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse Slack API response: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"Unexpected error adding reaction: {e}")
-        return False
+        cookies = _build_slack_cookies(config)
+
+        try:
+            response = _http_post(
+                f"{config['SLACK_ORG_URL']}/api/reactions.add",
+                data=data,
+                cookies=cookies,
+                headers=_DEFAULT_HEADERS,
+                timeout=5,
+            )
+            session_result: dict[str, Any] = response.json()
+
+            if session_result.get("ok"):
+                logger.debug(f"Successfully added reaction :{emoji}:")
+                return True
+
+            error = session_result.get("error", "unknown")
+
+            # Optional auth debugging (no secrets)
+            if config.get("__DEBUG_AUTH") == "1":
+                _print_auth_debug(
+                    endpoint="reactions.add",
+                    config=config,
+                    response=response,
+                    slack_result=result,
+                )
+
+            # Handle rate limiting
+            if error == "ratelimited":
+                retry_after = response.headers.get("Retry-After", "60")
+                logger.warning(f"Rate limited on reactions.add, retry after {retry_after}s")
+                raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
+
+            # Handle invalid emoji
+            if error == "invalid_name":
+                logger.warning(f"Invalid emoji name: {emoji}")
+                return False
+
+            # Handle already reacted
+            if error == "already_reacted":
+                logger.debug(f"Already reacted with :{emoji}:")
+                return True
+
+            logger.warning(f"Failed to add reaction: {error}")
+            return False
+
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            logger.error(f"Network error adding reaction: {e}")
+            if config.get("__DEBUG_AUTH") == "1":
+                _print_auth_debug(
+                    endpoint="reactions.add", config=config, note=f"network_error: {e}"
+                )
+            raise SlackNetworkError(f"Network error: {e}") from e
+        except (SlackRateLimitError, SlackAPIError):
+            # Re-raise our custom exceptions
+            raise
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Slack API response: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error adding reaction: {e}")
+            return False
 
 
 # =============================================================================
@@ -1430,71 +1582,138 @@ def list_channels(
     all_channels: list[dict[str, Any]] = []
     cursor: str | None = None
 
-    cookies = _build_slack_cookies(config)
+    use_bot_token = _is_bot_token_auth(config)
 
     while True:
-        data: dict[str, Any] = {
-            "token": config["SLACK_XOXC_TOKEN"],
-            "types": types,
-            "exclude_archived": "true",
-            "limit": 200,
-        }
-        if cursor:
-            data["cursor"] = cursor
+        if use_bot_token:
+            # Bot token: Use standard Web API
+            headers = _build_auth_headers(config)
+            params: dict[str, Any] = {
+                "types": types,
+                "exclude_archived": "true",
+                "limit": 200,
+            }
+            if cursor:
+                params["cursor"] = cursor
 
-        try:
-            response = _http_post(
-                f"{config['SLACK_ORG_URL']}/api/conversations.list",
-                data=data,
-                cookies=cookies,
-                headers=_DEFAULT_HEADERS,
-                timeout=15,
-            )
-            result: dict[str, Any] = response.json()
-
-            if not result.get("ok"):
-                error = result.get("error", "unknown")
-
-                if error == "ratelimited":
-                    retry_after = response.headers.get("Retry-After", "60")
-                    logger.warning(
-                        f"Rate limited on conversations.list, retry after {retry_after}s"
-                    )
-                    raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
-
-                if error in ("invalid_auth", "token_revoked", "token_expired"):
-                    logger.error(f"Authentication error: {error}")
-                    raise SlackAPIError(f"Authentication error: {error}")
-
-                logger.error(f"Slack API error: {error}")
-                raise SlackAPIError(f"Slack API error: {error}")
-
-            channels = result.get("channels", [])
-            for ch in channels:
-                all_channels.append(
-                    {
-                        "id": ch.get("id", ""),
-                        "name": ch.get("name", ""),
-                        "num_members": ch.get("num_members", 0),
-                        "is_private": ch.get("is_private", False),
-                        "topic": ch.get("topic", {}).get("value", ""),
-                    }
+            try:
+                response = _http_get(
+                    "https://slack.com/api/conversations.list",
+                    headers=headers,
+                    params=params,
+                    timeout=15,
                 )
+                result: dict[str, Any] = response.json()
 
-            # Check for pagination
-            response_metadata = result.get("response_metadata", {})
-            cursor = response_metadata.get("next_cursor")
-            if not cursor:
-                break
+                if not result.get("ok"):
+                    error = result.get("error", "unknown")
 
-        except (httpx.TimeoutException, httpx.NetworkError) as e:
-            logger.error(f"Network error listing channels: {e}")
-            raise SlackNetworkError(f"Network error: {e}") from e
-        except (SlackRateLimitError, SlackAPIError):
-            raise
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse Slack API response: {e}")
-            raise SlackAPIError(f"Invalid JSON response: {e}") from e
+                    if error == "ratelimited":
+                        retry_after = response.headers.get("Retry-After", "60")
+                        logger.warning(
+                            f"Rate limited on conversations.list, retry after {retry_after}s"
+                        )
+                        raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
+
+                    if error in ("invalid_auth", "token_revoked", "token_expired", "not_authed"):
+                        logger.error(f"Authentication error: {error}")
+                        raise SlackAPIError(f"Authentication error: {error}")
+
+                    logger.error(f"Slack API error: {error}")
+                    raise SlackAPIError(f"Slack API error: {error}")
+
+                channels = result.get("channels", [])
+                for ch in channels:
+                    all_channels.append(
+                        {
+                            "id": ch.get("id", ""),
+                            "name": ch.get("name", ""),
+                            "num_members": ch.get("num_members", 0),
+                            "is_private": ch.get("is_private", False),
+                            "topic": ch.get("topic", {}).get("value", ""),
+                        }
+                    )
+
+                # Check for pagination
+                response_metadata = result.get("response_metadata", {})
+                cursor = response_metadata.get("next_cursor")
+                if not cursor:
+                    break
+
+            except (httpx.TimeoutException, httpx.NetworkError) as e:
+                logger.error(f"Network error listing channels: {e}")
+                raise SlackNetworkError(f"Network error: {e}") from e
+            except (SlackRateLimitError, SlackAPIError):
+                raise
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse Slack API response: {e}")
+                raise SlackAPIError(f"Invalid JSON response: {e}") from e
+
+        else:
+            # Session token: Use webapp API
+            cookies = _build_slack_cookies(config)
+            data: dict[str, Any] = {
+                "token": config["SLACK_XOXC_TOKEN"],
+                "types": types,
+                "exclude_archived": "true",
+                "limit": 200,
+            }
+            if cursor:
+                data["cursor"] = cursor
+
+            try:
+                response = _http_post(
+                    f"{config['SLACK_ORG_URL']}/api/conversations.list",
+                    data=data,
+                    cookies=cookies,
+                    headers=_DEFAULT_HEADERS,
+                    timeout=15,
+                )
+                session_result: dict[str, Any] = response.json()
+
+                if not session_result.get("ok"):
+                    error = session_result.get("error", "unknown")
+
+                    if error == "ratelimited":
+                        retry_after = response.headers.get("Retry-After", "60")
+                        logger.warning(
+                            f"Rate limited on conversations.list, retry after {retry_after}s"
+                        )
+                        raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
+
+                    if error in ("invalid_auth", "token_revoked", "token_expired"):
+                        logger.error(f"Authentication error: {error}")
+                        raise SlackAPIError(f"Authentication error: {error}")
+
+                    logger.error(f"Slack API error: {error}")
+                    raise SlackAPIError(f"Slack API error: {error}")
+
+                channels = session_result.get("channels", [])
+                for ch in channels:
+                    all_channels.append(
+                        {
+                            "id": ch.get("id", ""),
+                            "name": ch.get("name", ""),
+                            "num_members": ch.get("num_members", 0),
+                            "is_private": ch.get("is_private", False),
+                            "topic": ch.get("topic", {}).get("value", ""),
+                        }
+                    )
+
+                # Check for pagination
+                response_metadata = session_result.get("response_metadata", {})
+                cursor = response_metadata.get("next_cursor")
+                if not cursor:
+                    break
+
+            except (httpx.TimeoutException, httpx.NetworkError) as e:
+                logger.error(f"Network error listing channels: {e}")
+                raise SlackNetworkError(f"Network error: {e}") from e
+            except (SlackRateLimitError, SlackAPIError):
+                raise
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse Slack API response: {e}")
+                raise SlackAPIError(f"Invalid JSON response: {e}") from e
 
     logger.debug(f"Found {len(all_channels)} channels")
     return all_channels
@@ -2801,91 +3020,155 @@ def post_message(
         {"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": elements}]}
     ]
 
-    data = {
-        "token": config["SLACK_XOXC_TOKEN"],
-        "channel": config["SLACK_CHANNEL_ID"],
-        "type": "message",
-        "xArgs": "{}",
-        "unfurl": "[]",
-        "client_context_team_id": config["SLACK_TEAM_ID"],
-        "blocks": json.dumps(blocks),
-        "include_channel_perm_error": "true",
-        "client_msg_id": str(uuid.uuid4()),
-        "_x_reason": "webapp_message_send",
-        "_x_mode": "online",
-        "_x_sonic": "true",
-        "_x_app_name": "client",
-    }
+    # Determine authentication method
+    use_bot_token = _is_bot_token_auth(config)
 
-    if thread_ts:
-        data["reply_broadcast"] = "false"
-        data["thread_ts"] = thread_ts
+    if use_bot_token:
+        # Bot token: Use standard Web API with JSON payload
+        headers = _build_auth_headers(config)
+        headers["Content-Type"] = "application/json"
 
-    cookies = _build_slack_cookies(config)
+        payload = {
+            "channel": config["SLACK_CHANNEL_ID"],
+            "blocks": blocks,
+        }
 
-    try:
-        # Use form-urlencoded like the working script (not multipart)
-        response = _http_post(
-            f"{config['SLACK_ORG_URL']}/api/chat.postMessage",
-            data=data,
-            cookies=cookies,
-            headers=_DEFAULT_HEADERS,
-            timeout=10,
-        )
-        result: dict[str, Any] = response.json()
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
 
-        if result.get("ok"):
-            logger.debug(f"Successfully posted message: {result.get('ts')}")
-            return result
+        try:
+            response = _http_post(
+                "https://slack.com/api/chat.postMessage",
+                json_data=payload,
+                headers=headers,
+                timeout=10,
+            )
+            result: dict[str, Any] = response.json()
 
-        error = result.get("error", "unknown")
+            if result.get("ok"):
+                logger.debug(f"Successfully posted message: {result.get('ts')}")
+                return result
 
-        # Optional auth debugging (no secrets)
-        if config.get("__DEBUG_AUTH") == "1":
-            _print_auth_debug(
-                endpoint="chat.postMessage",
-                config=config,
+            error = result.get("error", "unknown")
+
+            # Handle rate limiting
+            if error == "ratelimited":
+                retry_after = response.headers.get("Retry-After", "60")
+                logger.warning(f"Rate limited on chat.postMessage, retry after {retry_after}s")
+                raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
+
+            # Handle channel errors
+            if error in ("channel_not_found", "not_in_channel"):
+                logger.error(f"Channel error: {error}")
+                raise SlackAPIError(f"Channel error: {error}")
+
+            # Handle auth errors
+            if error in ("invalid_auth", "token_revoked", "token_expired", "not_authed"):
+                logger.error(f"Authentication error: {error}")
+                raise SlackAPIError(f"Authentication error: {error}")
+
+            logger.error(f"Slack API error: {error}")
+            return None
+
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            logger.error(f"Network error posting message: {e}")
+            raise SlackNetworkError(f"Network error: {e}") from e
+        except (SlackRateLimitError, SlackAPIError):
+            raise
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Slack API response: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error posting message: {e}")
+            return None
+
+    else:
+        # Session token: Use webapp API with form-urlencoded data
+        data = {
+            "token": config["SLACK_XOXC_TOKEN"],
+            "channel": config["SLACK_CHANNEL_ID"],
+            "type": "message",
+            "xArgs": "{}",
+            "unfurl": "[]",
+            "client_context_team_id": config["SLACK_TEAM_ID"],
+            "blocks": json.dumps(blocks),
+            "include_channel_perm_error": "true",
+            "client_msg_id": str(uuid.uuid4()),
+            "_x_reason": "webapp_message_send",
+            "_x_mode": "online",
+            "_x_sonic": "true",
+            "_x_app_name": "client",
+        }
+
+        if thread_ts:
+            data["reply_broadcast"] = "false"
+            data["thread_ts"] = thread_ts
+
+        cookies = _build_slack_cookies(config)
+
+        try:
+            # Use form-urlencoded like the working script (not multipart)
+            response = _http_post(
+                f"{config['SLACK_ORG_URL']}/api/chat.postMessage",
+                data=data,
                 cookies=cookies,
-                response=response,
-                slack_result=result,
-                note=f"thread_ts={'yes' if thread_ts else 'no'}",
+                headers=_DEFAULT_HEADERS,
+                timeout=10,
             )
+            session_result: dict[str, Any] = response.json()
 
-        # Handle rate limiting
-        if error == "ratelimited":
-            retry_after = response.headers.get("Retry-After", "60")
-            logger.warning(f"Rate limited on chat.postMessage, retry after {retry_after}s")
-            raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
+            if session_result.get("ok"):
+                logger.debug(f"Successfully posted message: {session_result.get('ts')}")
+                return session_result
 
-        # Handle channel errors
-        if error in ("channel_not_found", "not_in_channel"):
-            logger.error(f"Channel error: {error}")
-            raise SlackAPIError(f"Channel error: {error}")
+            error = session_result.get("error", "unknown")
 
-        # Handle auth errors
-        if error in ("invalid_auth", "token_revoked", "token_expired"):
-            logger.error(f"Authentication error: {error}")
-            raise SlackAPIError(f"Authentication error: {error}")
+            # Optional auth debugging (no secrets)
+            if config.get("__DEBUG_AUTH") == "1":
+                _print_auth_debug(
+                    endpoint="chat.postMessage",
+                    config=config,
+                    cookies=cookies,
+                    response=response,
+                    slack_result=session_result,
+                    note=f"thread_ts={'yes' if thread_ts else 'no'}",
+                )
 
-        logger.error(f"Slack API error: {error}")
-        return None
+            # Handle rate limiting
+            if error == "ratelimited":
+                retry_after = response.headers.get("Retry-After", "60")
+                logger.warning(f"Rate limited on chat.postMessage, retry after {retry_after}s")
+                raise SlackRateLimitError(f"Rate limited, retry after {retry_after}s")
 
-    except (httpx.TimeoutException, httpx.NetworkError) as e:
-        logger.error(f"Network error posting message: {e}")
-        if config.get("__DEBUG_AUTH") == "1":
-            _print_auth_debug(
-                endpoint="chat.postMessage", config=config, note=f"network_error: {e}"
-            )
-        raise SlackNetworkError(f"Network error: {e}") from e
-    except (SlackRateLimitError, SlackAPIError):
-        # Re-raise our custom exceptions
-        raise
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse Slack API response: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"Unexpected error posting message: {e}")
-        return None
+            # Handle channel errors
+            if error in ("channel_not_found", "not_in_channel"):
+                logger.error(f"Channel error: {error}")
+                raise SlackAPIError(f"Channel error: {error}")
+
+            # Handle auth errors
+            if error in ("invalid_auth", "token_revoked", "token_expired"):
+                logger.error(f"Authentication error: {error}")
+                raise SlackAPIError(f"Authentication error: {error}")
+
+            logger.error(f"Slack API error: {error}")
+            return None
+
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            logger.error(f"Network error posting message: {e}")
+            if config.get("__DEBUG_AUTH") == "1":
+                _print_auth_debug(
+                    endpoint="chat.postMessage", config=config, note=f"network_error: {e}"
+                )
+            raise SlackNetworkError(f"Network error: {e}") from e
+        except (SlackRateLimitError, SlackAPIError):
+            # Re-raise our custom exceptions
+            raise
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse Slack API response: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error posting message: {e}")
+            return None
 
 
 def parse_args() -> argparse.Namespace:

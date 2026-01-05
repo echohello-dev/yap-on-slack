@@ -31,8 +31,8 @@ Post realistic support conversations to Slack with proper formatting, threading,
 You'll need Slack credentials to post messages. We support multiple authentication methods:
 
 - **Session Tokens** (xoxc/xoxd) - Quick setup, browser-based (expires frequently)
-- **User OAuth Token** (xoxp) - Recommended for production use
-- **Bot Token** (xoxb) - For bot-based workflows
+- **Bot Token** (xoxb) - Recommended for automation and CI/CD workflows
+- **User OAuth Token** (xoxp) - For production use with longer expiration
 
 📖 **See [docs/usage.md](docs/usage.md#authentication-setup)** for detailed setup instructions for each method.
 

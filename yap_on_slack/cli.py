@@ -5,6 +5,7 @@ import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
@@ -13,7 +14,41 @@ from rich.table import Table
 
 from yap_on_slack import __version__, get_git_commit
 
+if TYPE_CHECKING:
+    from yap_on_slack.post_messages import SlackUser, SlackWorkspace
+
 console = Console()
+
+
+def _build_config_dict(workspace: "SlackWorkspace", user: "SlackUser") -> dict[str, str]:
+    """Build a config dict from workspace and user, filtering out None values.
+
+    Args:
+        workspace: SlackWorkspace with org URL, channel ID, and team ID
+        user: SlackUser with session tokens or bot token
+
+    Returns:
+        Config dict with only non-None string values for type safety
+    """
+    config: dict[str, str] = {
+        "SLACK_ORG_URL": workspace.SLACK_ORG_URL,
+        "SLACK_CHANNEL_ID": workspace.SLACK_CHANNEL_ID,
+        "SLACK_TEAM_ID": workspace.SLACK_TEAM_ID,
+    }
+
+    # Add session tokens if present
+    if user.SLACK_XOXC_TOKEN is not None:
+        config["SLACK_XOXC_TOKEN"] = user.SLACK_XOXC_TOKEN
+    if user.SLACK_XOXD_TOKEN is not None:
+        config["SLACK_XOXD_TOKEN"] = user.SLACK_XOXD_TOKEN
+    if user.SLACK_COOKIES is not None:
+        config["SLACK_COOKIES"] = user.SLACK_COOKIES
+
+    # Add bot token if present
+    if user.SLACK_BOT_TOKEN is not None:
+        config["SLACK_BOT_TOKEN"] = user.SLACK_BOT_TOKEN
+
+    return config
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -111,15 +146,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 1
 
         user = app_config.users[0]
-        config = {
-            "SLACK_ORG_URL": app_config.workspace.SLACK_ORG_URL,
-            "SLACK_CHANNEL_ID": app_config.workspace.SLACK_CHANNEL_ID,
-            "SLACK_TEAM_ID": app_config.workspace.SLACK_TEAM_ID,
-            "SLACK_XOXC_TOKEN": user.SLACK_XOXC_TOKEN,
-            "SLACK_XOXD_TOKEN": user.SLACK_XOXD_TOKEN,
-        }
-        if user.SLACK_COOKIES:
-            config["SLACK_COOKIES"] = user.SLACK_COOKIES
+        config = _build_config_dict(app_config.workspace, user)
 
         if args.interactive:
             console.print("\n[bold cyan]Fetching available channels...[/bold cyan]")
@@ -416,7 +443,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
         args.limit = int(env["_SCAN_LIMIT"])
     if env.get("_SCAN_THROTTLE") and args.throttle == 1.5:  # 1.5 is the argparse default
         args.throttle = float(env["_SCAN_THROTTLE"])
-    if env.get("_SCAN_THROTTLE_RANGE") and args.throttle_range == 0.5:  # 0.5 is the argparse default
+    if (
+        env.get("_SCAN_THROTTLE_RANGE") and args.throttle_range == 0.5
+    ):  # 0.5 is the argparse default
         args.throttle_range = float(env["_SCAN_THROTTLE_RANGE"])
     if env.get("_SCAN_MODEL") and args.model == "openrouter/auto":  # default
         args.model = env["_SCAN_MODEL"]
@@ -431,15 +460,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         return 1
 
     user = app_config.users[0]
-    config = {
-        "SLACK_ORG_URL": app_config.workspace.SLACK_ORG_URL,
-        "SLACK_CHANNEL_ID": app_config.workspace.SLACK_CHANNEL_ID,
-        "SLACK_TEAM_ID": app_config.workspace.SLACK_TEAM_ID,
-        "SLACK_XOXC_TOKEN": user.SLACK_XOXC_TOKEN,
-        "SLACK_XOXD_TOKEN": user.SLACK_XOXD_TOKEN,
-    }
-    if user.SLACK_COOKIES:
-        config["SLACK_COOKIES"] = user.SLACK_COOKIES
+    config = _build_config_dict(app_config.workspace, user)
 
     channel_id = args.channel_id
     channel_name = "unknown"
@@ -699,7 +720,9 @@ def cmd_scan(args: argparse.Namespace) -> int:
         if export_file:
             console.print(f"\n[bold]Channel data saved to:[/bold] {export_file.absolute()}")
         else:
-            console.print("[bold yellow]No data was exported (use --no-export-data to skip export)[/bold yellow]")
+            console.print(
+                "[bold yellow]No data was exported (use --no-export-data to skip export)[/bold yellow]"
+            )
         return 0
 
     # Dry run mode - stop here

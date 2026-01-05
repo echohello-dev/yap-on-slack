@@ -10,10 +10,18 @@ workspace:
 
 # Default credentials (required if not using users array)
 # Extract tokens from browser dev tools while logged into Slack
+# OR use a bot token from your Slack app
 credentials:
+  # Session tokens (extract from browser dev tools)
   xoxc_token: xoxc-your-token-here  # Session token (starts with xoxc-)
   xoxd_token: xoxd-your-token-here  # Session cookie (starts with xoxd-)
   cookies: ""                        # Optional: extra cookies (semi-colon separated)
+  
+  # OR use a bot token instead (alternative to session tokens)
+  # bot_token: xoxb-your-bot-token-here  # From Slack app OAuth settings
+  # Bot tokens require: chat:write, reactions:write, channels:read scopes
+  # Note: Bot messages will appear as "App" not as a user
+  # Use session tokens for more realistic user simulations
 
 # SSL/TLS settings (optional)
 # Useful for corporate proxies or self-signed certificates
@@ -36,9 +44,16 @@ user_strategy: round_robin  # Options: round_robin | random
 # Additional users (optional, merged with default credentials user)
 # Uncomment to enable multi-user posting:
 # users:
+#   # User with session tokens
 #   - name: alice
 #     xoxc_token: xoxc-alice-token
 #     xoxd_token: xoxd-alice-token
+#   
+#   # User with bot token
+#   - name: bot_user
+#     bot_token: xoxb-bot-token-here
+#   
+#   # Another session token user
 #   - name: bob
 #     xoxc_token: xoxc-bob-token
 #     xoxd_token: xoxd-bob-token

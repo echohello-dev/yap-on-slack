@@ -14,11 +14,74 @@
 
 Open up your Slack in your browser and login.
 
-> **Note**: This tool uses Slack *session tokens* from your browser session: `xoxc-*` plus the `d` cookie value (often starts with `xoxd-*`).
+> **Note**: This tool supports multiple authentication methods: session tokens (xoxc/xoxd), bot tokens (xoxb), and user OAuth tokens (xoxp).
 
-### Option 1: Using Session Tokens (Browser-based)
+### Option 1: Using Bot Token (Recommended for Automation)
+
+✅ **Recommended** for CI/CD, automation, and long-running deployments.
+
+**Advantages:**
+- Never expires (unless manually revoked)
+- No browser session required
+- Simple setup with Slack App
+- Works great in Docker/containers
+- Perfect for CI/CD pipelines
+
+**Limitations:**
+- Messages appear as bot, not individual users
+- Requires bot to be invited to channels
+- Cannot use search.messages API
+
+**Setup Steps:**
+
+1. **Create a Slack App**
+   - Go to [api.slack.com/apps](https://api.slack.com/apps)
+   - Click "Create New App" → "From scratch"
+   - Name it (e.g., "Yap Testing Bot")
+   - Select your workspace
+
+2. **Add Bot Token Scopes**
+   - Navigate to "OAuth & Permissions" in the sidebar
+   - Scroll to "Bot Token Scopes"
+   - Click "Add an OAuth Scope" and add:
+     - `chat:write` - Post messages
+     - `chat:write.public` - Post to public channels without joining
+     - `reactions:write` - Add reactions
+     - `channels:read` - View channel info
+     - `channels:history` - Read channel messages (for scanning)
+     - `groups:read` - View private channel info (if needed)
+     - `groups:history` - Read private channel messages (if needed)
+
+3. **Install App to Workspace**
+   - Scroll up to "OAuth Tokens for Your Workspace"
+   - Click "Install to Workspace" or "Reinstall to Workspace"
+   - Review permissions and click "Allow"
+   - Copy the "Bot User OAuth Token" (starts with `xoxb-`)
+
+4. **Invite Bot to Channels**
+   - In Slack, type `/invite @YourBotName` in the target channel
+   - Or use "Add apps" from the channel details
+
+5. **Add to Config**
+   ```yaml
+   credentials:
+     bot_token: xoxb-YOUR-BOT-TOKEN-HERE  # Replace with your actual token
+   ```
+
+### Option 2: Using Session Tokens (Browser-based)
 
 ⚠️ **Security Warning**: Session tokens are less secure and expire frequently. See [SECURITY.md](../SECURITY.md) for important security considerations.
+
+**Advantages:**
+- Quick setup (no app creation needed)
+- Messages appear as your user
+- Full Slack API access
+
+**Limitations:**
+- Expires frequently (requires re-extraction)
+- Requires browser session
+- Less secure
+- Not suitable for automation
 
 #### Lookup `SLACK_XOXC_TOKEN`
 
@@ -44,7 +107,7 @@ Token value is printed right after the executed command (it starts with
 - Press Ctrl+C or Cmd+C to copy it's value to clipboard.
 - Save it for later.
 
-### Option 2: Using User OAuth Token (Recommended)
+### Option 3: Using User OAuth Token
 
 Instead of using browser-based tokens (`xoxc`/`xoxd`), you can use a User OAuth token:
 
@@ -102,18 +165,6 @@ To create the app from a manifest with permissions preconfigured, use the follow
     }
 }
 ```
-
-### Option 3: Using Bot Token
-
-You can also use a Bot token instead of a User token:
-
-1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app
-2. Under "OAuth & Permissions", add Bot Token Scopes (same as User scopes above, except `search:read`)
-3. Install the app to your workspace
-4. Copy the "Bot User OAuth Token" (starts with `xoxb-`)
-5. **Important**: Bot must be invited to channels for access
-
-> **Note**: Bot tokens cannot use `search.messages` API, so some search functionality may be limited.
 
 ## Getting Slack Credentials
 

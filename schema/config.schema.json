@@ -69,6 +69,14 @@
                     "examples": [
                         "d-s=1234567890; x=xoxd-1234567890"
                     ]
+                },
+                "bot_token": {
+                    "type": "string",
+                    "description": "Slack bot token (alternative to session tokens). Use xoxb- token from Slack app OAuth settings. Bot must have chat:write, reactions:write, and channels:read scopes.",
+                    "pattern": "^xoxb-.+",
+                    "examples": [
+                        "xoxb-your-bot-token-here"
+                    ]
                 }
             },
             "additionalProperties": false
@@ -118,9 +126,7 @@
             "items": {
                 "type": "object",
                 "required": [
-                    "name",
-                    "xoxc_token",
-                    "xoxd_token"
+                    "name"
                 ],
                 "properties": {
                     "name": {
@@ -152,6 +158,14 @@
                         "description": "Optional extra Slack cookies for this user",
                         "examples": [
                             "d-s=1234567890"
+                        ]
+                    },
+                    "bot_token": {
+                        "type": "string",
+                        "description": "Slack bot token for this user (alternative to session tokens)",
+                        "pattern": "^xoxb-.+",
+                        "examples": [
+                            "xoxb-alice-bot-token"
                         ]
                     }
                 },
