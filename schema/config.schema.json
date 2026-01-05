@@ -94,6 +94,11 @@
                     "type": "boolean",
                     "description": "Disable strict X509 verification (Python 3.13+ compatibility for corporate proxy certificates)",
                     "default": false
+                },
+                "strict_x509": {
+                    "type": ["boolean", "null"],
+                    "description": "Force strict X509 verification mode (null=auto-disable for custom CA bundles, true=force enable, false=force disable)",
+                    "default": null
                 }
             },
             "additionalProperties": false

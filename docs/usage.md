@@ -200,6 +200,8 @@ You can also use a Bot token instead of a User token:
 
 ## Configuration
 
+> **Important**: This tool uses **config.yaml** for all configuration, NOT `.env` files. Config files use YAML format and support workspace settings, credentials, multi-user setup, AI settings, and more.
+
 ### Config File Locations
 
 Yap on Slack uses **YAML configuration** (`config.yaml` or `.yos.yaml`). Config files are discovered in this priority order:
@@ -212,14 +214,20 @@ Yap on Slack uses **YAML configuration** (`config.yaml` or `.yos.yaml`). Config 
 **Initialize configuration:**
 
 ```bash
-# Create ~/.config/yap-on-slack/config.yaml (default location)
+# Create ~/.config/yap-on-slack/config.yaml (default XDG location)
 yos init
 
-# Create .yos.yaml in current directory (project-specific)
+# Create .yos.yaml in current directory (project-specific, highest priority)
 yos init --local
 
 # Force overwrite existing config
 yos init --force
+
+# View config template
+yos show-config
+
+# View JSON schema
+yos show-schema
 ```
 
 ### Configuration File Structure
@@ -307,29 +315,36 @@ github:
 
 ### Environment Variables
 
-Environment variables override config file settings:
+Environment variables **override** config file settings. This is useful for CI/CD, Docker, or temporary overrides without editing config files:
 
 ```bash
-# Workspace
+# Workspace settings (override workspace: section in config.yaml)
 export SLACK_ORG_URL=https://your-workspace.slack.com
 export SLACK_CHANNEL_ID=C01234ABC56
 export SLACK_TEAM_ID=T01234ABC56
 
-# Credentials
+# Credentials (override credentials: section in config.yaml)
 export SLACK_XOXC_TOKEN=xoxc-...
 export SLACK_XOXD_TOKEN=xoxd-...
 
-# AI generation
+# AI generation (override ai: section in config.yaml)
 export OPENROUTER_API_KEY=sk-or-v1-...
 
-# GitHub integration (optional)
+# GitHub integration (override github: section in config.yaml)
 export GITHUB_TOKEN=ghp_...  # For AI to reference your repos
+
+# SSL/TLS (standard environment variables - automatically detected)
+export SSL_CERT_FILE=~/your-corporate-cert.pem       # CA bundle (highest priority)
+export REQUESTS_CA_BUNDLE=~/your-corporate-cert.pem  # requests library
+export CURL_CA_BUNDLE=~/your-corporate-cert.pem      # curl
+export SSL_CERT_DIR=/etc/ssl/certs                   # CA certificate directory
+export SSL_STRICT_X509=false                         # Control strict X509 verification (true/false)
 
 # Optional
 export LOG_LEVEL=INFO  # DEBUG, INFO, WARNING, ERROR
 ```
 
-> **Note**: Environment variables take precedence over config file values.
+> **Note**: Environment variables take precedence over config file values. Standard SSL environment variables (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `SSL_CERT_DIR`) are automatically detected without additional configuration. When a custom CA bundle is detected, strict X509 verification is automatically disabled (Python 3.13+ compatibility for corporate proxies).
 
 ### Multi-user Configuration
 
@@ -442,16 +457,31 @@ mise run run
 ### Initialize Configuration
 
 ```bash
-# Create ~/.config/yap-on-slack/config.yaml (XDG default)
+# Create ~/.config/yap-on-slack/config.yaml (XDG default, recommended)
 yos init
 
-# Create .yos.yaml in current directory (project-specific)
+# Create .yos.yaml in current directory (project-specific, higher priority)
 yos init --local
 
-# Edit the created config file
-nano ~/.config/yap-on-slack/config.yaml
+# View config template without creating file
+yos show-config
 
-# Add workspace, credentials, and messages
+# View JSON schema for validation
+yos show-schema
+
+# Edit the created config file (choose one based on what you created)
+nano ~/.config/yap-on-slack/config.yaml  # For default location
+# OR
+nano .yos.yaml  # For project-specific config
+
+# Config files use YAML format - see template for all available options:
+# - workspace: (org_url, channel_id, team_id)
+# - credentials: (xoxc_token, xoxd_token)
+# - users: (multi-user setup)
+# - messages: (custom messages)
+# - ai: (AI generation settings with GitHub integration)
+# - scan: (channel scanning settings)
+# - ssl: (SSL/TLS settings for corporate proxies)
 ```
 
 ### Basic Usage
@@ -889,8 +919,10 @@ export REQUESTS_CA_BUNDLE=~/your-corporate-cert.pem   # Used by requests library
 export CURL_CA_BUNDLE=~/your-corporate-cert.pem       # Used by curl
 export SSL_CERT_DIR=/etc/ssl/certs        # CA certificate directory
 
-# For Python 3.13+ with corporate proxies
-export SSL_NO_STRICT=true
+# For Python 3.13+ with corporate proxies (auto-disabled by default)
+# Only needed if you want to force strict mode with custom CA:
+export SSL_STRICT_X509=false  # Disable strict X509 verification
+# Or: export SSL_STRICT_X509=true  # Force enable (rare, only for testing)
 
 # Now just run normally - no additional configuration needed!
 yos run
@@ -905,7 +937,9 @@ cat /path/to/corporate-ca.crt >> ~/your-corporate-cert.pem
 cat >> ~/.config/yap-on-slack/config.yaml <<EOF
 ssl:
   ca_bundle: ~/your-corporate-cert.pem
-  no_strict: true  # Python 3.13+ compat
+  # strict_x509: null  # Auto mode (default): disables strict for custom CA
+  # strict_x509: true  # Force enable strict X509 (rare, only if needed)
+  # strict_x509: false # Force disable strict X509 (legacy compat)
 EOF
 
 yos run
@@ -913,7 +947,13 @@ yos run
 
 **Option 3: Use CLI flags**
 ```bash
-# Pass CA bundle and disable strict mode via CLI
+# Pass CA bundle (strict X509 auto-disabled for corporate certs)
+yos run --ssl-ca-bundle ~/your-corporate-cert.pem
+
+# Or force strict mode (only if you have certs with proper extensions)
+yos run --ssl-ca-bundle ~/your-corporate-cert.pem --ssl-strict
+
+# Legacy: explicitly disable strict mode
 yos run --ssl-ca-bundle ~/your-corporate-cert.pem --ssl-no-strict
 ```
 
@@ -939,17 +979,18 @@ yos run
 ```
 
 **Priority Order:**
-1. CLI flags (highest)
-2. Environment variables (`SSL_VERIFY`, `SSL_CA_BUNDLE`, `SSL_NO_STRICT`)
-3. Standard cert env vars (`SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `SSL_CERT_DIR`)
-4. Config file
-5. System defaults (lowest)
+1. CLI flags (highest) - `--ssl-strict`, `--ssl-no-strict`, `--ssl-ca-bundle`, `--no-verify-ssl`
+2. Environment variables - `SSL_STRICT_X509`, `SSL_VERIFY`, `SSL_CA_BUNDLE`, `SSL_NO_STRICT`
+3. Standard cert env vars - `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `SSL_CERT_DIR`
+4. Config file - `ssl.strict_x509`, `ssl.verify`, `ssl.ca_bundle`, `ssl.no_strict`
+5. Auto-detection - Disables strict X509 when custom CA bundle is detected (Python 3.13+ compat)
+6. System defaults (lowest)
 
 **Example: Corporate Proxy (Netskope, Zscaler) - Automatic**
 ```bash
 # Set once in your shell profile (.zshrc, .bashrc, etc.)
 export REQUESTS_CA_BUNDLE=~/your-corporate-cert.pem
-export SSL_NO_STRICT=true
+# SSL_STRICT_X509 is auto-disabled for custom CA bundles - no manual config needed!
 
 # Now yos works automatically without any configuration!
 yos run

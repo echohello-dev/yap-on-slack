@@ -396,11 +396,14 @@ def cmd_scan(args: argparse.Namespace) -> int:
     ssl_config = app_config.ssl
     if args.no_verify_ssl:
         ssl_config = SSLConfigModel(verify=False)
-    elif args.ssl_ca_bundle or args.ssl_no_strict:
+    elif args.ssl_ca_bundle or args.ssl_no_strict or args.ssl_strict:
         ssl_config = SSLConfigModel(
             verify=True,
             ca_bundle=args.ssl_ca_bundle or (ssl_config.ca_bundle if ssl_config else None),
             no_strict=args.ssl_no_strict or (ssl_config.no_strict if ssl_config else False),
+            strict_x509=(
+                True if args.ssl_strict else (ssl_config.strict_x509 if ssl_config else None)
+            ),
         )
 
     # Initialize SSL context before making API calls
@@ -921,6 +924,11 @@ Commands can also be invoked as:
         help="Disable strict X509 verification for Python 3.13+ (helpful with corporate proxy certificates)",
     )
     run_parser.add_argument(
+        "--ssl-strict",
+        action="store_true",
+        help="Enable strict X509 verification even with custom CA bundle (overrides auto-detection)",
+    )
+    run_parser.add_argument(
         "--debug-auth",
         action="store_true",
         help="Print safe (redacted) Slack request/response diagnostics on failures",
@@ -999,6 +1007,11 @@ Commands can also be invoked as:
         "--ssl-no-strict",
         action="store_true",
         help="Disable strict X509 verification for Python 3.13+ (helpful with corporate proxy certificates)",
+    )
+    scan_parser.add_argument(
+        "--ssl-strict",
+        action="store_true",
+        help="Enable strict X509 verification even with custom CA bundle (overrides auto-detection)",
     )
     scan_parser.set_defaults(func=cmd_scan)
 

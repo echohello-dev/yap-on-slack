@@ -23,10 +23,14 @@ from pydantic import BaseModel, ValidationError, field_validator
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.panel import Panel
-from rich.progress import (BarColumn, Progress, SpinnerColumn,
-                           TaskProgressColumn, TextColumn)
-from tenacity import (RetryError, retry, retry_if_exception_type,
-                      stop_after_attempt, wait_exponential)
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 console = Console()
 
@@ -44,6 +48,69 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Global SSL context for httpx requests (set by main() based on config/CLI)
 _SSL_CONTEXT: bool | ssl.SSLContext = True  # Default: verify SSL
+
+# Default HTTP headers for Slack API requests
+_DEFAULT_HEADERS = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+
+
+def _http_get(
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    timeout: int = 10,
+) -> httpx.Response:
+    """Make an HTTP GET request with SSL context.
+
+    All HTTP GET requests should use this helper to ensure consistent
+    SSL context handling across the codebase.
+
+    Args:
+        url: The URL to request
+        headers: Optional request headers
+        params: Optional query parameters
+        timeout: Request timeout in seconds
+
+    Returns:
+        httpx.Response object
+    """
+    return httpx.get(url, headers=headers, params=params, timeout=timeout, verify=_SSL_CONTEXT)
+
+
+def _http_post(
+    url: str,
+    *,
+    data: dict[str, Any] | None = None,
+    json_data: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    timeout: int = 10,
+) -> httpx.Response:
+    """Make an HTTP POST request with SSL context.
+
+    All HTTP POST requests should use this helper to ensure consistent
+    SSL context handling across the codebase.
+
+    Args:
+        url: The URL to request
+        data: Optional form data (application/x-www-form-urlencoded)
+        json_data: Optional JSON body
+        headers: Optional request headers
+        cookies: Optional cookies
+        timeout: Request timeout in seconds
+
+    Returns:
+        httpx.Response object
+    """
+    return httpx.post(
+        url,
+        data=data,
+        json=json_data,
+        headers=headers,
+        cookies=cookies,
+        timeout=timeout,
+        verify=_SSL_CONTEXT,
+    )
 
 
 def _load_system_prompt(prompt_name: str) -> str:
@@ -185,6 +252,7 @@ class SSLConfigModel(BaseModel):
     verify: bool = True
     ca_bundle: str | None = None
     no_strict: bool = False
+    strict_x509: bool | None = None  # None = auto (disable for custom CA), True/False = force
 
     @field_validator("ca_bundle")
     @classmethod
@@ -525,6 +593,16 @@ def create_ssl_context(ssl_config: SSLConfigModel | None = None) -> bool | ssl.S
         )
         return False
 
+    # Check for SSL_STRICT_X509 environment variable (can enable/disable strict mode)
+    # Values: 'true', '1' enable strict mode; 'false', '0' disable strict mode
+    if ssl_config.strict_x509 is None:
+        env_strict = os.getenv("SSL_STRICT_X509", "").lower()
+        if env_strict in ("true", "1"):
+            ssl_config.strict_x509 = True
+        elif env_strict in ("false", "0"):
+            # Note: This would override auto-disable for custom CA bundles
+            ssl_config.strict_x509 = False
+
     # Check for CA bundle from standard environment variables (priority order)
     # This allows the tool to work automatically in corporate environments
     ca_bundle_path = ssl_config.ca_bundle
@@ -563,17 +641,38 @@ def create_ssl_context(ssl_config: SSLConfigModel | None = None) -> bool | ssl.S
             except Exception as e:
                 logger.warning(f"Failed to load CA directory {ca_cert_dir}: {e}")
 
-        # Disable strict X509 verification if requested (Python 3.13+ compatibility)
-        if ssl_config.no_strict:
+        # Automatically disable strict X509 verification when using custom CA bundle
+        # Corporate/proxy CAs often lack required extensions that Python 3.13+ enforces
+        # However, can be explicitly overridden via strict_x509=True config/env var
+        should_disable_strict = ssl_config.no_strict or (
+            (ca_bundle_path or ca_cert_dir) and ssl_config.strict_x509 is not True
+        )
+
+        if should_disable_strict:
             try:
                 # Check if VERIFY_X509_STRICT exists (Python 3.13+)
                 if hasattr(ssl, "VERIFY_X509_STRICT"):
-                    logger.info("Disabling strict X509 verification (Python 3.13+ compatibility)")
+                    reason = (
+                        "explicit --ssl-no-strict flag"
+                        if ssl_config.no_strict and not (ca_bundle_path or ca_cert_dir)
+                        else "custom CA bundle/directory (corporate proxy compatibility)"
+                    )
+                    logger.info(f"Disabling strict X509 verification ({reason})")
                     context.verify_flags &= ~ssl.VERIFY_X509_STRICT
                 else:
                     logger.debug("VERIFY_X509_STRICT not available (Python < 3.13)")
             except AttributeError:
                 logger.debug("Could not disable VERIFY_X509_STRICT (not supported)")
+        elif ssl_config.strict_x509 is True:
+            try:
+                # Explicitly enable strict X509 verification
+                if hasattr(ssl, "VERIFY_X509_STRICT"):
+                    logger.info("Enabling strict X509 verification (via config/env var)")
+                    context.verify_flags |= ssl.VERIFY_X509_STRICT
+                else:
+                    logger.debug("VERIFY_X509_STRICT not available (Python < 3.13)")
+            except AttributeError:
+                logger.debug("Could not enable VERIFY_X509_STRICT (not supported)")
 
         return context
 
@@ -1201,16 +1300,14 @@ def add_reaction(channel: str, timestamp: str, emoji: str, config: dict[str, str
     }
 
     cookies = _build_slack_cookies(config)
-    headers = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
     try:
-        response = httpx.post(
+        response = _http_post(
             f"{config['SLACK_ORG_URL']}/api/reactions.add",
             data=data,
             cookies=cookies,
-            headers=headers,
+            headers=_DEFAULT_HEADERS,
             timeout=5,
-            verify=_SSL_CONTEXT,
         )
         result: dict[str, Any] = response.json()
 
@@ -1299,7 +1396,6 @@ def list_channels(
     cursor: str | None = None
 
     cookies = _build_slack_cookies(config)
-    headers = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
     while True:
         data: dict[str, Any] = {
@@ -1312,13 +1408,12 @@ def list_channels(
             data["cursor"] = cursor
 
         try:
-            response = httpx.post(
+            response = _http_post(
                 f"{config['SLACK_ORG_URL']}/api/conversations.list",
                 data=data,
                 cookies=cookies,
-                headers=headers,
+                headers=_DEFAULT_HEADERS,
                 timeout=15,
-                verify=_SSL_CONTEXT,
             )
             result: dict[str, Any] = response.json()
 
@@ -1389,7 +1484,6 @@ def get_channel_info(config: dict[str, str], channel_id: str) -> dict[str, Any] 
     logger.debug(f"Getting channel info for {channel_id}")
 
     cookies = _build_slack_cookies(config)
-    headers = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
     data = {
         "token": config["SLACK_XOXC_TOKEN"],
@@ -1397,13 +1491,12 @@ def get_channel_info(config: dict[str, str], channel_id: str) -> dict[str, Any] 
     }
 
     try:
-        response = httpx.post(
+        response = _http_post(
             f"{config['SLACK_ORG_URL']}/api/conversations.info",
             data=data,
             cookies=cookies,
-            headers=headers,
+            headers=_DEFAULT_HEADERS,
             timeout=10,
-            verify=_SSL_CONTEXT,
         )
         result: dict[str, Any] = response.json()
 
@@ -1462,7 +1555,6 @@ def fetch_channel_messages(
     logger.debug(f"Fetching up to {limit} messages from channel {channel_id}")
 
     cookies = _build_slack_cookies(config)
-    headers = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
     all_messages: list[dict[str, Any]] = []
     reaction_counts: dict[str, int] = {}
@@ -1483,13 +1575,12 @@ def fetch_channel_messages(
             data["cursor"] = cursor
 
         try:
-            response = httpx.post(
+            response = _http_post(
                 f"{config['SLACK_ORG_URL']}/api/conversations.history",
                 data=data,
                 cookies=cookies,
-                headers=headers,
+                headers=_DEFAULT_HEADERS,
                 timeout=15,
-                verify=_SSL_CONTEXT,
             )
             result: dict[str, Any] = response.json()
 
@@ -1571,7 +1662,7 @@ def fetch_channel_messages(
                 return thread_ts, [], 0
 
             try:
-                response = httpx.post(
+                response = _http_post(
                     f"{config['SLACK_ORG_URL']}/api/conversations.replies",
                     data={
                         "token": config["SLACK_XOXC_TOKEN"],
@@ -1580,9 +1671,8 @@ def fetch_channel_messages(
                         "limit": 100,
                     },
                     cookies=cookies,
-                    headers=headers,
+                    headers=_DEFAULT_HEADERS,
                     timeout=15,
-                    verify=_SSL_CONTEXT,
                 )
                 result = response.json()
 
@@ -1781,14 +1871,14 @@ Based on this data, generate 3 comprehensive system prompt variations as a JSON 
 
     try:
         with console.status(f"[bold magenta]Generating prompts with {model}...", spinner="dots"):
-            response = httpx.post(
+            response = _http_post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {openrouter_key}",
                     "Content-Type": "application/json",
                     "HTTP-Referer": "https://github.com/echohello-dev/yap-on-slack",
                 },
-                json={
+                json_data={
                     "model": model,
                     "messages": [
                         {"role": "system", "content": system_message},
@@ -1798,7 +1888,6 @@ Based on this data, generate 3 comprehensive system prompt variations as a JSON 
                     "max_tokens": 6000,
                 },
                 timeout=60,
-                verify=_SSL_CONTEXT,
             )
 
         if response.status_code != 200:
@@ -1899,11 +1988,10 @@ def get_authenticated_user(gh_token: str) -> dict[str, Any] | None:
     """
     try:
         logger.debug("Fetching authenticated user info...")
-        response = httpx.get(
+        response = _http_get(
             "https://api.github.com/user",
             headers={"Authorization": f"Bearer {gh_token}"},
             timeout=10,
-            verify=_SSL_CONTEXT,
         )
         if response.status_code == 200:
             user: dict[str, Any] = response.json()
@@ -1988,12 +2076,11 @@ def get_user_repos(
 
     try:
         logger.debug(f"Fetching user's repositories (top {max_repos})...")
-        response = httpx.get(
+        response = _http_get(
             "https://api.github.com/user/repos",
             headers={"Authorization": f"Bearer {gh_token}"},
             params={"sort": "updated", "per_page": 50},
             timeout=10,
-            verify=_SSL_CONTEXT,
         )
         if response.status_code == 200:
             repos = response.json()
@@ -2124,11 +2211,10 @@ def get_github_context(
                 # Fetch repo metadata if enabled
                 repo_metadata = None
                 if github_config and github_config.include_repo_metadata:
-                    repo_response = httpx.get(
+                    repo_response = _http_get(
                         f"https://api.github.com/repos/{repo}",
                         headers=headers,
                         timeout=10,
-                        verify=_SSL_CONTEXT,
                     )
                     if repo_response.status_code == 200:
                         repo_data = repo_response.json()
@@ -2155,12 +2241,11 @@ def get_github_context(
                         # GitHub API uses 'author' parameter for commit filtering
                         commit_params["author"] = authors[0] if len(authors) == 1 else None
 
-                    response = httpx.get(
+                    response = _http_get(
                         f"https://api.github.com/repos/{repo}/commits",
                         headers=headers,
                         params=commit_params,
                         timeout=10,
-                        verify=_SSL_CONTEXT,
                     )
                     if response.status_code == 200:
                         commits = response.json()
@@ -2201,12 +2286,11 @@ def get_github_context(
                         pr_params["sort"] = "updated"
                         pr_params["direction"] = "desc"
 
-                    response = httpx.get(
+                    response = _http_get(
                         f"https://api.github.com/repos/{repo}/pulls",
                         headers=headers,
                         params=pr_params,
                         timeout=10,
-                        verify=_SSL_CONTEXT,
                     )
                     if response.status_code == 200:
                         prs = response.json()
@@ -2248,12 +2332,11 @@ def get_github_context(
                     if authors and len(authors) == 1:
                         issue_params["creator"] = authors[0]
 
-                    response = httpx.get(
+                    response = _http_get(
                         f"https://api.github.com/repos/{repo}/issues",
                         headers=headers,
                         params=issue_params,
                         timeout=10,
-                        verify=_SSL_CONTEXT,
                     )
                     if response.status_code == 200:
                         issues = response.json()
@@ -2444,14 +2527,14 @@ def generate_messages_with_ai(
 
     try:
         with console.status(f"[bold magenta]Generating messages with {model}...", spinner="dots"):
-            response = httpx.post(
+            response = _http_post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {openrouter_key}",
                     "Content-Type": "application/json",
                     "HTTP-Referer": "https://github.com/echohello-dev/yap-on-slack",
                 },
-                json={
+                json_data={
                     "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": temperature,
@@ -2463,7 +2546,6 @@ def generate_messages_with_ai(
                     },
                 },
                 timeout=30,
-                verify=_SSL_CONTEXT,
             )
 
         if response.status_code == 200:
@@ -2703,17 +2785,15 @@ def post_message(
         data["thread_ts"] = thread_ts
 
     cookies = _build_slack_cookies(config)
-    headers = {"user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 
     try:
         # Use form-urlencoded like the working script (not multipart)
-        response = httpx.post(
+        response = _http_post(
             f"{config['SLACK_ORG_URL']}/api/chat.postMessage",
             data=data,
             cookies=cookies,
-            headers=headers,
+            headers=_DEFAULT_HEADERS,
             timeout=10,
-            verify=_SSL_CONTEXT,
         )
         result: dict[str, Any] = response.json()
 
@@ -2944,6 +3024,9 @@ def main() -> None:
         if args.ssl_no_strict:
             ssl_config.no_strict = True
             logger.info("Strict X509 verification disabled via --ssl-no-strict")
+        if args.ssl_strict:
+            ssl_config.strict_x509 = True
+            logger.info("Strict X509 verification enabled via --ssl-strict")
 
     # Set global SSL context for httpx requests
     _SSL_CONTEXT = create_ssl_context(app_config.ssl)

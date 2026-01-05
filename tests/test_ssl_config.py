@@ -386,3 +386,151 @@ class TestSSLConfigIntegration:
         result = create_ssl_context(config)
         # Should use system defaults (secure)
         assert result is True
+
+
+class TestStrictX509Configuration:
+    """Test strict X509 verification configuration (Python 3.13+)."""
+
+    def test_strict_x509_default_none(self):
+        """Test that strict_x509 defaults to None (auto mode)."""
+        config = SSLConfigModel()
+        assert config.strict_x509 is None
+
+    def test_strict_x509_explicit_true(self):
+        """Test explicit strict_x509=True (force enable)."""
+        config = SSLConfigModel(strict_x509=True)
+        assert config.strict_x509 is True
+
+    def test_strict_x509_explicit_false(self):
+        """Test explicit strict_x509=False (force disable)."""
+        config = SSLConfigModel(strict_x509=False)
+        assert config.strict_x509 is False
+
+    def test_strict_x509_auto_disables_with_custom_ca(self):
+        """Test that strict X509 is auto-disabled when custom CA bundle is used."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
+            ca_bundle_path = f.name
+            f.write("# Test CA bundle\n")
+
+        try:
+            # strict_x509=None (default) should auto-disable with custom CA
+            config = SSLConfigModel(ca_bundle=ca_bundle_path, strict_x509=None)
+
+            with patch(
+                "yap_on_slack.post_messages.ssl.create_default_context"
+            ) as mock_create_context:
+                mock_context = MagicMock(spec=ssl.SSLContext)
+                # Simulate VERIFY_X509_STRICT flag
+                mock_context.verify_flags = (
+                    ssl.VERIFY_X509_STRICT if hasattr(ssl, "VERIFY_X509_STRICT") else 0
+                )
+                mock_create_context.return_value = mock_context
+
+                result = create_ssl_context(config)
+
+                assert result is mock_context
+                # Verify flags were modified (strict disabled)
+                assert mock_context.verify_flags != (
+                    ssl.VERIFY_X509_STRICT if hasattr(ssl, "VERIFY_X509_STRICT") else 0
+                )
+        finally:
+            Path(ca_bundle_path).unlink()
+
+    def test_strict_x509_force_enable_with_custom_ca(self):
+        """Test that strict_x509=True forces strict mode even with custom CA."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
+            ca_bundle_path = f.name
+            f.write("# Test CA bundle\n")
+
+        try:
+            # strict_x509=True should force enable even with custom CA
+            config = SSLConfigModel(ca_bundle=ca_bundle_path, strict_x509=True)
+
+            with patch(
+                "yap_on_slack.post_messages.ssl.create_default_context"
+            ) as mock_create_context:
+                mock_context = MagicMock(spec=ssl.SSLContext)
+                mock_context.verify_flags = 0
+                mock_create_context.return_value = mock_context
+
+                result = create_ssl_context(config)
+
+                assert result is mock_context
+                # Verify strict flag was enabled (if Python 3.13+)
+                if hasattr(ssl, "VERIFY_X509_STRICT"):
+                    assert mock_context.verify_flags & ssl.VERIFY_X509_STRICT
+        finally:
+            Path(ca_bundle_path).unlink()
+
+    def test_strict_x509_env_var_true(self):
+        """Test SSL_STRICT_X509 environment variable set to 'true'."""
+        with patch.dict("os.environ", {"SSL_STRICT_X509": "true"}):
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
+                ca_bundle_path = f.name
+                f.write("# Test CA bundle\n")
+
+            try:
+                config = SSLConfigModel(ca_bundle=ca_bundle_path)
+
+                with patch(
+                    "yap_on_slack.post_messages.ssl.create_default_context"
+                ) as mock_create_context:
+                    mock_context = MagicMock(spec=ssl.SSLContext)
+                    mock_context.verify_flags = 0
+                    mock_create_context.return_value = mock_context
+
+                    result = create_ssl_context(config)
+
+                    assert result is mock_context
+                    # Should have enabled strict mode via env var
+                    if hasattr(ssl, "VERIFY_X509_STRICT"):
+                        assert mock_context.verify_flags & ssl.VERIFY_X509_STRICT
+            finally:
+                Path(ca_bundle_path).unlink()
+
+    def test_strict_x509_env_var_false(self):
+        """Test SSL_STRICT_X509 environment variable set to 'false'."""
+        with patch.dict("os.environ", {"SSL_STRICT_X509": "false"}):
+            config = SSLConfigModel()
+
+            with patch(
+                "yap_on_slack.post_messages.ssl.create_default_context"
+            ) as mock_create_context:
+                mock_context = MagicMock(spec=ssl.SSLContext)
+                mock_context.verify_flags = (
+                    ssl.VERIFY_X509_STRICT if hasattr(ssl, "VERIFY_X509_STRICT") else 0
+                )
+                mock_create_context.return_value = mock_context
+
+                # Even without custom CA, env var should force disable
+                result = create_ssl_context(config)
+
+                # With no custom CA and SSL_STRICT_X509=false, should use defaults
+                # (because no_strict mode is only triggered with custom CA or explicit flag)
+                assert result is True  # Uses system defaults
+
+    def test_strict_x509_env_var_numeric(self):
+        """Test SSL_STRICT_X509 environment variable with numeric values."""
+        # Test '1' (true)
+        with patch.dict("os.environ", {"SSL_STRICT_X509": "1"}):
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
+                ca_bundle_path = f.name
+                f.write("# Test CA bundle\n")
+
+            try:
+                config = SSLConfigModel(ca_bundle=ca_bundle_path)
+
+                with patch(
+                    "yap_on_slack.post_messages.ssl.create_default_context"
+                ) as mock_create_context:
+                    mock_context = MagicMock(spec=ssl.SSLContext)
+                    mock_context.verify_flags = 0
+                    mock_create_context.return_value = mock_context
+
+                    result = create_ssl_context(config)
+
+                    assert result is mock_context
+                    if hasattr(ssl, "VERIFY_X509_STRICT"):
+                        assert mock_context.verify_flags & ssl.VERIFY_X509_STRICT
+            finally:
+                Path(ca_bundle_path).unlink()

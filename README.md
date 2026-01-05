@@ -49,12 +49,16 @@ pipx install yap-on-slack
 # Or install directly from GitHub
 pipx install git+https://github.com/echohello-dev/yap-on-slack.git
 
-# Initialize config files in current directory
+# Initialize config file (creates ~/.config/yap-on-slack/config.yaml)
 yos init
 
-# Edit .env with your credentials
+# Or create project-specific config in current directory
+yos init --local  # Creates .yos.yaml
+
+# Edit config with your credentials
 # See docs/usage.md for how to obtain each value
-nano .env
+nano ~/.config/yap-on-slack/config.yaml
+# Or: nano .yos.yaml (if using --local)
 
 # Run with default messages
 yos run
@@ -161,21 +165,33 @@ Run `yos --help` or `yos run --help` for full options.
 
 ## AI Message Generation
 
-Generate realistic conversations using OpenRouter's Gemini 3 Flash model with optional GitHub context:
+Generate realistic conversations using OpenRouter's AI models with optional GitHub context:
 
 1. **Get an OpenRouter API key**: https://openrouter.ai
-2. **Add to `.env`**:
-   ```bash
-   OPENROUTER_API_KEY=sk-or-v1-your-key-here
+2. **Add to config file** (`~/.config/yap-on-slack/config.yaml` or `.yos.yaml`):
+   ```yaml
+   ai:
+     enabled: false  # Set to true or use --use-ai flag
+     api_key: sk-or-v1-your-key-here
+     model: openrouter/auto  # Auto-selects best model
+     github:
+       enabled: true
+       token: ghp_your-token-here  # Optional, falls back to GITHUB_TOKEN env var
+       limit: 5  # Max repos to fetch
    ```
-3. **Optional: Add GitHub token for context**:
+   Or use environment variables:
    ```bash
-   GITHUB_TOKEN=ghp_your-token-here
-   # Or use: gh auth token (if GitHub CLI installed)
+   export OPENROUTER_API_KEY=sk-or-v1-your-key-here
+   export GITHUB_TOKEN=ghp_your-token-here  # Optional for GitHub context
+   # SSL/TLS configuration (automatically respects Python's standard cert variables)
+   export SSL_CERT_FILE=~/your-corporate-cert.pem  # Custom CA bundle
+   export SSL_STRICT_X509=false  # Disable strict X509 (for corporate certs)
+   # Or: REQUESTS_CA_BUNDLE, CURL_CA_BUNDLE, SSL_CERT_DIR
    ```
-4. **Run with AI**:
+3. **Run with AI**:
    ```bash
    yos run --use-ai
+   yos run --use-ai --use-github  # Include GitHub context
    ```
 
 When `--use-ai` is used:
@@ -212,11 +228,28 @@ Create `messages.json` with your conversation threads:
 ```bash
 # Build and run locally
 docker build -t yap-on-slack .
-docker run --rm --env-file .env yap-on-slack
+
+# Mount config file from ~/.config
+docker run --rm \
+  -v ~/.config/yap-on-slack:/root/.config/yap-on-slack \
+  yap-on-slack yos run
 
 # Or use pre-built image from GitHub Container Registry
 docker pull ghcr.io/echohello-dev/yap-on-slack:latest
-docker run --rm --env-file .env ghcr.io/echohello-dev/yap-on-slack:latest
+
+# Mount config file
+docker run --rm \
+  -v ~/.config/yap-on-slack:/root/.config/yap-on-slack \
+  ghcr.io/echohello-dev/yap-on-slack:latest yos run
+
+# Or pass credentials via environment variables
+docker run --rm \
+  -e SLACK_XOXC_TOKEN="xoxc-..." \
+  -e SLACK_XOXD_TOKEN="xoxd-..." \
+  -e SLACK_ORG_URL="https://workspace.slack.com" \
+  -e SLACK_CHANNEL_ID="C123" \
+  -e SLACK_TEAM_ID="T123" \
+  ghcr.io/echohello-dev/yap-on-slack:latest yos run
 ```
 
 ## Development
