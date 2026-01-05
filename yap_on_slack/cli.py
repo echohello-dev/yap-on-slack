@@ -623,11 +623,11 @@ def cmd_scan(args: argparse.Namespace) -> int:
         output_dir = Path.home() / ".config" / "yap-on-slack" / "scan"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Export data by default (unless --no-export-data)
+    # Export data by default (unless --no-export-data or --export-only without data export)
     export_file: Path | None = None
     if not args.no_export_data:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        export_file = output_dir / f"channel_export_{channel_name}_{timestamp}.txt"
+        export_file = output_dir / f"{channel_name}_export_{timestamp}.txt"
 
         lines: list[str] = []
         lines.append(f"# Channel Export: #{channel_name}")
@@ -690,6 +690,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
             f"\n  [link=file://{export_file.absolute()}][cyan]{export_file.absolute()}[/cyan][/link]"
         )
 
+    # Export-only mode - stop here without generating prompts
+    if args.export_only:
+        console.print("\n[bold green]✓ Export-only mode complete[/bold green]")
+        if export_file:
+            console.print(f"\n[bold]Channel data saved to:[/bold] {export_file.absolute()}")
+        else:
+            console.print("[bold yellow]No data was exported (use --no-export-data to skip export)[/bold yellow]")
+        return 0
+
     # Dry run mode - stop here
     if args.dry_run:
         console.print("\n[bold green]✓ Dry run complete[/bold green]")
@@ -709,12 +718,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
         console.print("[bold red]Error:[/bold red] Failed to generate prompts")
         return 1
 
-    # Save prompts
+    # Save prompts with channel name at start and timestamp at end
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_files: list[Path] = []
 
     for i, prompt in enumerate(prompts, 1):
-        filename = f"system_prompt_draft_{timestamp}_{i}.md"
+        filename = f"{channel_name}_system_prompt_{i}_{timestamp}.md"
         filepath = output_dir / filename
 
         content = f"""# System Prompt Draft {i}
@@ -967,8 +976,8 @@ Commands can also be invoked as:
     scan_parser.add_argument(
         "--throttle",
         type=float,
-        default=0.5,
-        help="Delay between API call batches in seconds (default: 0.5)",
+        default=1.5,
+        help="Delay between API call batches in seconds (default: 1.5, with randomization ±0.5s)",
     )
     scan_parser.add_argument(
         "--output-dir",
@@ -991,6 +1000,11 @@ Commands can also be invoked as:
         "--no-export-data",
         action="store_true",
         help="Skip exporting messages, threads, replies, and reactions to a text file",
+    )
+    scan_parser.add_argument(
+        "--export-only",
+        action="store_true",
+        help="Export channel data only without generating prompts",
     )
     scan_parser.add_argument(
         "--no-verify-ssl",

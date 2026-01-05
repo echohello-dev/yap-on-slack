@@ -133,6 +133,39 @@ def _load_system_prompt(prompt_name: str) -> str:
 DEFAULT_AI_SYSTEM_PROMPT = _load_system_prompt("generate_messages")
 
 
+def apply_throttle(
+    base_throttle: float,
+    randomize: bool = True,
+    randomization_range: float = 0.5,
+    max_wait_time: float = 60.0,
+) -> None:
+    """Apply intelligent throttling with optional randomization.
+
+    Adds randomness (±randomization_range) to avoid predictable patterns.
+    Useful for simulating natural delays between API calls.
+
+    Args:
+        base_throttle: Base delay in seconds
+        randomize: Whether to add randomization (default: True)
+        randomization_range: Range for random deviation (default: ±0.5s)
+        max_wait_time: Maximum total wait time (timeout at 60s, default)
+
+    Example:
+        >>> apply_throttle(1.5)  # Sleep 1.5s ± 0.5s (varies each call)
+        >>> apply_throttle(2.0, randomize=False)  # Sleep exactly 2.0s
+    """
+    if randomize:
+        # Add random variation: base ± randomization_range
+        offset = random.uniform(-randomization_range, randomization_range)
+        actual_wait = max(0.1, min(base_throttle + offset, max_wait_time))
+    else:
+        # Enforce minimum even without randomization
+        actual_wait = max(0.1, min(base_throttle, max_wait_time))
+
+    logger.debug(f"Throttling for {actual_wait:.2f}s")
+    time.sleep(actual_wait)
+
+
 class SlackAPIError(Exception):
     """Base exception for Slack API errors."""
 
@@ -1637,7 +1670,7 @@ def fetch_channel_messages(
                 break
 
             # Only throttle between pagination requests
-            time.sleep(throttle)
+            apply_throttle(throttle, randomize=True)
 
         except (httpx.TimeoutException, httpx.NetworkError) as e:
             logger.error(f"Network error fetching messages: {e}")
@@ -1740,7 +1773,7 @@ def fetch_channel_messages(
 
             # Throttle between batches (not between individual requests)
             if batch_start + batch_size < len(threaded_messages):
-                time.sleep(throttle)
+                apply_throttle(throttle, randomize=True)
 
     # Sort reactions by count (exclude internal counter)
     filtered_reactions = {k: v for k, v in reaction_counts.items() if not k.startswith("_")}
